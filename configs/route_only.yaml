@@ -1,0 +1,3 @@
+extends: base.yaml
+name: route_only
+routing: {enabled: true}

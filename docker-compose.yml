@@ -1,0 +1,17 @@
+# Full run with Redis-backed caching:
+#   cp .env.example .env   # add keys
+#   docker compose run --rm runner run --tasks data/tasks/suite.jsonl --corpus data/corpus --out results
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  runner:
+    build: .
+    env_file: .env
+    environment:
+      COSTCOMPOSE_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./results:/app/results
+      - ./data:/app/data:ro
+    depends_on: [redis]

@@ -1,0 +1,50 @@
+# Shared settings. Every pipeline configuration extends this file.
+# Model ids are LiteLLM ids. Llama-3-8B is served with vLLM on the Lightning AI Studio GPU
+# (see scripts/serve_llama.sh) and reached through LiteLLM's hosted_vllm provider.
+
+name: base
+reference_model: gpt-4o            # "GPT-4o-equivalent" cost prices all tokens at this model
+embedding_model: text-embedding-3-small
+
+agents:
+  max_iterations: 5                # reasoning-loop cap per subtask (tool calls count)
+  top_k: 4                         # passages retrieved per subtask
+  max_subtasks: 4
+  temperature: 0.2
+
+caching:
+  enabled: false
+  threshold: 0.92                  # cosine similarity for a hit
+  scope: agent                     # agent | pipeline
+  model_aware: false               # false = a cached answer can serve a different routed model
+  backend: redis                   # redis | memory
+  redis_url: redis://localhost:6379/0
+
+routing:
+  enabled: false
+  policy: heuristic                # heuristic (paper) | linucb (learned contextual bandit)
+  bandit: {alpha: 1.0, ridge: 1.0, cost_weight: 0.5}
+  default_model: gpt-4o            # used for every call when routing is off
+  threshold: 0.5                   # score below this = low tier
+  weights: {query_tokens: 0.25, tool_calls: 0.25, context_tokens: 0.25, dependency_depth: 0.25}
+  norms:   {query_tokens: 512, tool_calls: 4, context_tokens: 8000, dependency_depth: 3}
+  ladder:                          # cheapest first; a call goes to the first rung with score < max_score
+    - {model: hosted_vllm/meta-llama/Meta-Llama-3-8B-Instruct, max_score: 0.25}
+    - {model: anthropic/claude-haiku-4-5, max_score: 0.5}
+    - {model: gpt-4o, max_score: 0.75}
+    - {model: anthropic/claude-sonnet-4-5, max_score: 1.0}
+
+early_stopping:
+  enabled: false
+  threshold: 0.88
+  self_report_weight: 0.5          # remainder weights draft-to-draft consistency
+
+# USD per 1M tokens. API list prices at time of writing: verify before a paid run.
+# The self-hosted Llama price is an amortised GPU-hour estimate; set it from your own
+# Studio GPU rate and measured throughput.
+prices:
+  gpt-4o: {input_per_mtok: 2.50, output_per_mtok: 10.00}
+  anthropic/claude-sonnet-4-5: {input_per_mtok: 3.00, output_per_mtok: 15.00}
+  anthropic/claude-haiku-4-5: {input_per_mtok: 1.00, output_per_mtok: 5.00}
+  hosted_vllm/meta-llama/Meta-Llama-3-8B-Instruct: {input_per_mtok: 0.10, output_per_mtok: 0.10}
+  text-embedding-3-small: {input_per_mtok: 0.02, output_per_mtok: 0.0}

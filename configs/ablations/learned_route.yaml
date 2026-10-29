@@ -1,0 +1,8 @@
+# Not in Table 1. Route-only with a LinUCB contextual bandit in place of the hand-set heuristic.
+# Same four features, same model ladder; the policy learns online from
+# reward = success - cost_weight * (call cost / GPT-4o-price cost).
+extends: ../route_only.yaml
+name: learned_route
+routing:
+  policy: linucb
+  bandit: {alpha: 1.0, ridge: 1.0, cost_weight: 0.5}

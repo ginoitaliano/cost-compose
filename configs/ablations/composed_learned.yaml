@@ -1,0 +1,7 @@
+# Composed with the learned router. Tests whether a policy trained under caching and early
+# stopping avoids the interference the heuristic router runs into (H1).
+extends: ../composed.yaml
+name: composed_learned
+routing:
+  policy: linucb
+  bandit: {alpha: 1.0, ridge: 1.0, cost_weight: 0.5}

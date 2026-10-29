@@ -1,0 +1,5 @@
+# Cache-only with pipeline-scope keys (agent input + upstream context). Compare its hit rate
+# with cache_only (agent scope) to test H2.
+extends: ../base.yaml
+name: cache_only_pipeline
+caching: {enabled: true, scope: pipeline}

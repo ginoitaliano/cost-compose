@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "costcompose"
+version = "0.2.0"
+description = "Measuring how semantic caching, model routing and early stopping compose in multi-agent LLM pipelines, with a learned (contextual bandit) router."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Sarah Ahmed Altarouti" }]
+keywords = ["llm", "multi-agent", "contextual-bandit", "reinforcement-learning", "inference-cost", "semantic-caching", "model-routing", "langgraph"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["numpy>=1.24", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+llm = ["litellm>=1.50"]
+graph = ["langgraph>=0.2"]
+redis = ["redis>=5.0"]
+tracing = ["langsmith>=0.1"]
+all = ["costcompose[llm,graph,redis,tracing]"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+
+[project.scripts]
+costcompose = "costcompose.cli:main"
+
+[project.urls]
+Repository = "https://github.com/YOUR_GITHUB_USERNAME/costcompose"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/costcompose"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]

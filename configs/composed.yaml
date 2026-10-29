@@ -1,0 +1,5 @@
+extends: base.yaml
+name: composed
+caching: {enabled: true}
+routing: {enabled: true}
+early_stopping: {enabled: true}

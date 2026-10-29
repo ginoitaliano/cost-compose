@@ -1,0 +1,9 @@
+{"id": "s-low-1", "question": "What is the daily meal allowance for an Acme employee travelling in an international city, in USD?", "answer": "95", "complexity": "low", "source": "sample"}
+{"id": "s-low-2", "question": "What is the first-response time for a Severity 1 issue under the Acme Enterprise Support SLA, in hours?", "answer": "1", "complexity": "low", "source": "sample"}
+{"id": "s-low-3", "question": "What is the base weekly GPU-hour quota for an Acme research team?", "answer": "64", "complexity": "low", "source": "sample"}
+{"id": "s-med-1", "question": "An Acme team with an approved project charter uses its full weekly GPU quota. How many GPU-hours is that per week?", "answer": "192", "complexity": "medium", "source": "sample"}
+{"id": "s-med-2", "question": "An Acme employee stays 3 nights in London at the maximum hotel rate. What is the total hotel cost in USD?", "answer": "750", "complexity": "medium", "source": "sample"}
+{"id": "s-med-3", "question": "A customer's platform fee is 40000 USD per month and uptime was 99.5%. What service credit do they receive in USD?", "answer": "4000", "complexity": "medium", "source": "sample"}
+{"id": "s-high-1", "question": "An Acme team with an approved project charter uses its full GPU quota every week for 4 weeks. At the internal chargeback rate, what is the total cost in USD?", "answer": "2457.6", "complexity": "high", "source": "sample"}
+{"id": "s-high-2", "question": "An Acme employee spends 5 days in Tokyo, staying 4 nights at the maximum hotel rate and claiming the full meal allowance each day. What is the total of hotel and meals in USD?", "answer": "1475", "complexity": "high", "source": "sample"}
+{"id": "s-high-3", "question": "A customer pays 40000 USD per month. Uptime was 99.95% in January and 98.7% in February. What is the total service credit across both months in USD?", "answer": "10000", "complexity": "high", "source": "sample"}

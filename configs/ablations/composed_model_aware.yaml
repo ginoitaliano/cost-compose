@@ -1,0 +1,5 @@
+# Composed, but cache hits must come from the same model the router picked. If H1 holds because
+# of cross-model cache hits, this variant should trade hit rate for success rate.
+extends: ../composed.yaml
+name: composed_model_aware
+caching: {model_aware: true}

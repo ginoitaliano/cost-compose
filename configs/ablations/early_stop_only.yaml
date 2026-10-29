@@ -1,0 +1,4 @@
+# Not in Table 1. Isolates early stopping's individual contribution.
+extends: ../base.yaml
+name: early_stop_only
+early_stopping: {enabled: true}

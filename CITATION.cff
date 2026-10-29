@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper."
+title: "Composing Cost-Reduction Techniques in Multi-Agent LLM Systems: A Practitioner's Empirical Study"
+authors:
+  - family-names: Altarouti
+    given-names: Sarah Ahmed
+repository-code: "https://github.com/YOUR_GITHUB_USERNAME/costcompose"
+license: MIT
+version: 0.2.0
+preferred-citation:
+  type: conference-paper
+  title: "Composing Cost-Reduction Techniques in Multi-Agent LLM Systems: A Practitioner's Empirical Study"
+  authors:
+    - family-names: Altarouti
+      given-names: Sarah Ahmed
+  collection-title: "NeurIPS 2026 Workshop on Women in Machine Learning (WiML)"
+  year: 2026

@@ -1,0 +1,6 @@
+# Not in Table 1. Caching + routing without early stopping, so H1 (sub-additive composition)
+# can be tested without a third technique confounding the comparison.
+extends: ../base.yaml
+name: cache_route
+caching: {enabled: true}
+routing: {enabled: true}
