@@ -51,7 +51,7 @@ jobs:
       - run: costcompose run --dry-run --engine langgraph --cache-backend redis --tasks data/tasks/sample.jsonl --corpus data/corpus --seeds 0 1 --out /tmp/results
         env:
           COSTCOMPOSE_REDIS_URL: redis://localhost:6379/0
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dry-run-results
           path: /tmp/results
