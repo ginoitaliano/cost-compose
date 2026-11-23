@@ -3,7 +3,12 @@ import os
 
 import pytest
 
-from costcompose.cache import InMemoryBackend, SemanticCache, extract_entities
+from costcompose.cache import (
+    InMemoryBackend,
+    SemanticCache,
+    extract_entities,
+    resolve_version_key,
+)
 from costcompose.llm import HashingEmbedder, LLMResponse, ToolCall, Usage
 
 
@@ -173,3 +178,43 @@ def test_skip_tool_calls_refuses_to_serve_existing_action_entries():
     hit, _, _ = strict.lookup("reasoner", "m1", "compute 192 * 3.2", "")
     assert hit is None
     assert strict.stats.tool_call_entries_refused["reasoner"] == 1
+
+
+# -- version_key ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("scope", ["agent", "pipeline"])
+def test_version_change_produces_a_miss(scope):
+    backend = InMemoryBackend()
+    v1 = SemanticCache(backend, HashingEmbedder(), scope=scope, version_key="v1")
+    _, vec, _ = v1.lookup("reasoner", "m1", "what is the meal allowance", "ctx")
+    v1.store("reasoner", "m1", vec, _resp("95"))
+    hit, _, _ = v1.lookup("reasoner", "m1", "what is the meal allowance", "ctx")
+    assert hit is not None
+
+    v2 = SemanticCache(backend, HashingEmbedder(), scope=scope, version_key="v2")
+    hit, _, _ = v2.lookup("reasoner", "m1", "what is the meal allowance", "ctx")
+    assert hit is None  # same backend, same request, new instructions: miss
+
+    unversioned = SemanticCache(backend, HashingEmbedder(), scope=scope)
+    hit, _, _ = unversioned.lookup("reasoner", "m1", "what is the meal allowance", "ctx")
+    assert hit is None
+
+
+def test_resolve_version_key(tmp_path):
+    assert resolve_version_key(None) is None
+    assert resolve_version_key("v3") == "v3"
+    assert resolve_version_key(2) == "2"
+    p = resolve_version_key("prompts")
+    assert p.startswith("prompts-") and p == resolve_version_key("prompts")
+    f = tmp_path / "instructions.md"
+    f.write_text("Answer in one word.")
+    k1 = resolve_version_key(f"file:{f}")
+    f.write_text("Answer in one sentence.")
+    assert resolve_version_key(f"file:{f}") != k1
+
+
+def test_unversioned_namespaces_are_unchanged():
+    c = _cache(scope="agent")
+    assert c._namespace("reasoner", "m1") == "agent:reasoner"
+    assert _cache(scope="pipeline", model_aware=True)._namespace("x", "m") == "pipeline|model:m"

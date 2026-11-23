@@ -22,13 +22,20 @@ semantically close but wrong answer (same question, different order ID).
 is never stored and never served. Replaying an action call is riskier than replaying text: its
 arguments were chosen for the request that produced it. Plans, retrieval summaries and final
 text are still cached.
+
+``version_key``: optional instruction/context version. When set, it becomes part of the
+namespace in both scopes, so entries written under other instructions are never matched. It goes
+in the namespace rather than the embedded text because a hash appended to the text moves cosine
+similarity only slightly and would not guarantee a miss.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
+from pathlib import Path
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -78,6 +85,31 @@ def _has_tool_call_args(tool_calls) -> bool:
         if args:
             return True
     return False
+
+
+def resolve_version_key(value: str | None) -> str | None:
+    """Turn ``caching.version_key`` into the string used in cache namespaces.
+
+    * ``None``: no versioning (default; namespaces unchanged).
+    * ``"prompts"``: short hash of every system prompt in ``costcompose.prompts``.
+    * ``"file:<path>"``: short hash of that file's contents (e.g. an instructions file).
+    * any other string: used as given (e.g. a hash computed elsewhere, or "v2").
+    """
+    if value is None:
+        return None
+    value = str(value)  # YAML may give `version_key: 2` as an int
+    if value == "prompts":
+        from . import prompts
+
+        text = "\n".join(
+            f"{k}={v}" for k, v in sorted(vars(prompts).items())
+            if k.isupper() and isinstance(v, str)
+        )
+        return "prompts-" + hashlib.sha256(text.encode()).hexdigest()[:12]
+    if value.startswith("file:"):
+        data = Path(value[len("file:"):]).read_bytes()
+        return "file-" + hashlib.sha256(data).hexdigest()[:12]
+    return value
 
 
 @dataclass
@@ -176,6 +208,7 @@ class SemanticCache:
         scope: str = "agent",
         model_aware: bool = False,
         skip_tool_calls: bool = False,
+        version_key: str | None = None,
     ) -> None:
         if scope not in {"agent", "pipeline"}:
             raise ValueError(scope)
@@ -185,10 +218,13 @@ class SemanticCache:
         self.scope = scope
         self.model_aware = model_aware
         self.skip_tool_calls = skip_tool_calls
+        self.version_key = version_key
         self.stats = CacheStats()
 
     def _namespace(self, agent: str, model: str) -> str:
         ns = f"agent:{agent}" if self.scope == "agent" else "pipeline"
+        if self.version_key is not None:
+            ns = f"{ns}|version:{self.version_key}"
         return f"{ns}|model:{model}" if self.model_aware else ns
 
     def key_text(self, agent: str, local_input: str, pipeline_context: str) -> str:

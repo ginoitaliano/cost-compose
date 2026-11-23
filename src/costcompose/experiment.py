@@ -10,7 +10,7 @@ from typing import Any
 
 from . import analysis
 from .agents import Runtime
-from .cache import InMemoryBackend, RedisBackend, SemanticCache
+from .cache import InMemoryBackend, RedisBackend, SemanticCache, resolve_version_key
 from .config import ExperimentConfig, load_config
 from .early_stop import EarlyStopper
 from .llm import FakeLLMClient, HashingEmbedder, LiteLLMClient, LiteLLMEmbedder
@@ -42,7 +42,8 @@ def make_cache(
     else:
         backend = InMemoryBackend()
     cache = SemanticCache(backend, embedder, c.threshold, c.scope, c.model_aware,
-                          skip_tool_calls=c.skip_tool_calls)
+                          skip_tool_calls=c.skip_tool_calls,
+                          version_key=resolve_version_key(c.version_key))
     cache.reset()  # every (config, seed) run starts cold
     return cache
 
