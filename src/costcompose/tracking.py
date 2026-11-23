@@ -38,6 +38,9 @@ class TaskTrace:
     calls: list[CallRecord] = field(default_factory=list)
     reasoning_iterations: int = 0
     early_stops: int = 0
+    cached_drafts: int = 0  # reasoner drafts served from the cache
+    cached_draft_replays: int = 0  # ...whose answer repeats an earlier draft in the same loop
+    cache_induced_early_stops: int = 0  # stops that would not have fired without cached drafts
     subtasks: int = 0
     tool_invocations: int = 0
     aux_cost_usd: float = 0.0  # retrieval-query embeddings, not tied to an LLM request
@@ -71,6 +74,9 @@ class TaskTrace:
             "routing_tiers": dict(Counter(c.tier for c in self.calls)),
             "reasoning_iterations": self.reasoning_iterations,
             "early_stops": self.early_stops,
+            "cached_drafts": self.cached_drafts,
+            "cached_draft_replays": self.cached_draft_replays,
+            "cache_induced_early_stops": self.cache_induced_early_stops,
             "subtasks": self.subtasks,
             "tool_invocations": self.tool_invocations,
         }

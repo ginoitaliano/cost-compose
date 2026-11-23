@@ -1,0 +1,6 @@
+# Composed, but drafts served from the semantic cache are left out of the early-stopping rule.
+# Compare with composed: if cache_induced_early_stops drive part of composed's savings or its
+# success loss, this variant should run more reasoning iterations and recover that success.
+extends: ../composed.yaml
+name: composed_exclude_cached_drafts
+early_stopping: {exclude_cached_drafts: true}

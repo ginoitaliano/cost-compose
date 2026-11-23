@@ -114,6 +114,7 @@ SCALARS = (
     "cross_model_hit_share",
     "llm_calls_per_task",
     "early_stops_per_task",
+    "cache_induced_early_stops_per_task",
 )
 
 
@@ -146,6 +147,9 @@ def _per_seed(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "llm_calls_per_task": float(np.mean([r["llm_calls"] for r in rows])),
         "early_stops_per_task": float(np.mean([r["early_stops"] for r in rows])),
+        "cache_induced_early_stops_per_task": float(
+            np.mean([r.get("cache_induced_early_stops", 0) for r in rows])
+        ),
         "cache_hit_rate_by_agent": {a: agent_hit[a] / n for a, n in agent_req.items() if n},
         "routing_share": {m: c / total_routed for m, c in sorted(routing.items())},
         "success_by_complexity": {k: float(np.mean(v)) for k, v in sorted(by_cx.items())},
@@ -188,6 +192,32 @@ def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "task_success_with_any_hit": _rate(sum(r["success"] for r in with_hit), len(with_hit)),
         "task_success_with_no_hit": _rate(sum(r["success"] for r in without), len(without)),
+    }
+
+
+def _cache_early_stop(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fourth composition effect: early stops triggered by drafts replayed from the cache."""
+    stops = sum(r["early_stops"] for r in rows)
+    induced = sum(r.get("cache_induced_early_stops", 0) for r in rows)
+    drafts = sum(r["reasoning_iterations"] for r in rows)
+    cached = sum(r.get("cached_drafts", 0) for r in rows)
+    with_induced = [r for r in rows if r.get("cache_induced_early_stops", 0) > 0]
+    without = [r for r in rows if r.get("cache_induced_early_stops", 0) == 0]
+    return {
+        "cache_induced_early_stops": induced,
+        "n_tasks": len(rows),
+        "per_task": induced / len(rows) if rows else None,
+        "share_of_early_stops": _rate(induced, stops),
+        "cached_share_of_drafts": _rate(cached, drafts),
+        "replay_share_of_cached_drafts": _rate(
+            sum(r.get("cached_draft_replays", 0) for r in rows), cached
+        ),
+        "task_success_with_induced_stop": _rate(
+            sum(r["success"] for r in with_induced), len(with_induced)
+        ),
+        "task_success_without_induced_stop": _rate(
+            sum(r["success"] for r in without), len(without)
+        ),
     }
 
 
@@ -236,6 +266,11 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 for i in range(n_bins)
             ],
             "seeds": sorted(seeds),
+            "cache_early_stop": (
+                _cache_early_stop([r for rows in seeds.values() for r in rows])
+                if techniques[name].get("caching") and techniques[name].get("early_stopping")
+                else None
+            ),
             "cache_correctness": (
                 _cache_correctness([r for rows in seeds.values() for r in rows])
                 if techniques[name].get("caching") else None
@@ -269,6 +304,13 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
             "pipeline_scope_entity_mismatch_share": pipe_cc.get(
                 "entity_mismatch_share_of_hits"
             ),
+        }
+    effect = {c: v["cache_early_stop"] for c, v in configs.items() if v.get("cache_early_stop")}
+    if effect:
+        out["E4_cache_induced_early_stops"] = {
+            "description": "early stops that fire only because cache-served drafts are counted "
+                           "(not a paper hypothesis; fourth composition effect)",
+            "by_config": effect,
         }
     pairs = [("learned_route", "route_only"), ("composed_learned", "composed")]
     learned = {}
@@ -334,6 +376,29 @@ def _cache_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
             f"| {_r(cc['entity_mismatch_share_of_hits'])} | {_r(cc['success_given_hit'])} "
             f"| {_r(cc['success_given_miss'])} | {_r(cc['task_success_with_any_hit'])} "
             f"| {_r(cc['task_success_with_no_hit'])} |"
+        )
+    return lines
+
+
+def _e4_markdown(e4: dict[str, Any] | None) -> list[str]:
+    if not e4:
+        return []
+    lines = [
+        "", "## Composition effect 4: cache-induced early stops", "",
+        "A cache-induced early stop fires on the full draft list but would not fire with "
+        "cache-served drafts removed. Pooled over seeds. Configs with "
+        "`early_stopping.exclude_cached_drafts: true` have 0 by construction.", "",
+        "| Config | Induced stops (per task) | Share of early stops | Cached share of drafts "
+        "| Replays among cached drafts | Task success, induced stop | Task success, none |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for c, e in e4["by_config"].items():
+        lines.append(
+            f"| {c} | {e['cache_induced_early_stops']} ({e['per_task']:.2f}, n={e['n_tasks']}) "
+            f"| {_r(e['share_of_early_stops'])} | {_r(e['cached_share_of_drafts'])} "
+            f"| {_r(e['replay_share_of_cached_drafts'])} "
+            f"| {_r(e['task_success_with_induced_stop'])} "
+            f"| {_r(e['task_success_without_induced_stop'])} |"
         )
     return lines
 
@@ -407,6 +472,7 @@ def to_markdown(summary: dict[str, Any]) -> str:
                              f"| {_fmt(q['cost_usd'], money=True)} |")
     lines += _cache_markdown(cfgs, order)
     lines += _h1_markdown(summary["hypotheses"].get("H1_sub_additive"))
+    lines += _e4_markdown(summary["hypotheses"].get("E4_cache_induced_early_stops"))
     lines += ["", "## Hypothesis checks", "", "```json"]
     lines += [json.dumps(summary["hypotheses"], indent=2), "```", ""]
     return "\n".join(lines)
