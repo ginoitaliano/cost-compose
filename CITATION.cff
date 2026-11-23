@@ -4,7 +4,7 @@ title: "Composing Cost-Reduction Techniques in Multi-Agent LLM Systems: A Practi
 authors:
   - family-names: Altarouti
     given-names: Sarah Ahmed
-repository-code: "https://github.com/YOUR_GITHUB_USERNAME/costcompose"
+repository-code: "https://github.com/ginoitaliano/cost-compose"
 license: MIT
 version: 0.2.0
 preferred-citation:

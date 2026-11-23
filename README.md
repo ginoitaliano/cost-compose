@@ -1,8 +1,11 @@
 # Composing Cost-Reduction Techniques in Multi-Agent LLM Systems
 
-[![CI](https://github.com/YOUR_GITHUB_USERNAME/costcompose/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/costcompose/actions/workflows/ci.yml)
+[![CI](https://github.com/ginoitaliano/cost-compose/actions/workflows/ci.yml/badge.svg)](https://github.com/ginoitaliano/cost-compose/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+Repository description: Harness for measuring how semantic caching, model routing and early stopping compose in a multi-agent LLM pipeline (NeurIPS 2026 WiML).
+Suggested GitHub topics: `llm`, `multi-agent`, `llm-inference`, `semantic-caching`, `model-routing`, `early-stopping`, `contextual-bandit`, `langgraph`, `benchmark`.
 
 Code for *Composing Cost-Reduction Techniques in Multi-Agent LLM Systems: A Practitioner's Empirical Study* (Sarah Ahmed Altarouti, NeurIPS 2026 Workshop on Women in Machine Learning).
 
@@ -63,12 +66,14 @@ The report includes a learning curve (success and cost per quarter of the task s
 ## Quickstart (no API keys)
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/costcompose
-cd costcompose
+git clone https://github.com/ginoitaliano/cost-compose
+cd cost-compose
 pip install -e ".[dev]"
 make test
 make dry-run
 ```
+
+The repository is named `cost-compose`. The Python distribution, the import path (`import costcompose`) and the CLI entry point (`costcompose`) are all `costcompose`, without the hyphen.
 
 `--dry-run` swaps in a deterministic offline model and embedder. It exercises every code path (planning, tool calls, caching, routing, early stopping, reporting) in seconds. Its numbers are a plumbing check, not results.
 
@@ -78,7 +83,8 @@ The experiments run on a Lightning AI Studio GPU, which also serves Llama-3-8B l
 
 ```bash
 pip install -e ".[all]"
-cp .env.example .env                       # OpenAI, Anthropic, LangSmith keys
+cp .env.example .env                       # OpenAI, Anthropic, LangSmith, Hugging Face keys
+set -a; . ./.env; set +a                   # the CLI does not read .env itself; export it
 docker run -d -p 6379:6379 redis:7-alpine  # cache backend
 ./scripts/serve_llama.sh &                 # vLLM, OpenAI-compatible, port 8000
 
