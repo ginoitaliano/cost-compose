@@ -4,7 +4,7 @@ import os
 import pytest
 
 from costcompose.cache import InMemoryBackend, SemanticCache, extract_entities
-from costcompose.llm import HashingEmbedder, LLMResponse, Usage
+from costcompose.llm import HashingEmbedder, LLMResponse, ToolCall, Usage
 
 
 def _cache(**kw):
@@ -141,3 +141,35 @@ def test_order_id_false_hit_under_real_embedder():
     c.store("reasoner", "m1", vec, _resp("x"), a)
     hit, _, _ = c.lookup("reasoner", "m1", b, "")
     assert hit is not None and hit.entity_mismatch
+
+
+# -- skip_tool_calls -------------------------------------------------------------------------
+
+
+def _tool_resp(args):
+    return LLMResponse("", "m1", Usage(10, 5), [ToolCall("c1", "calculator", args)])
+
+
+def test_skip_tool_calls_withholds_action_calls_from_store():
+    c = _cache(skip_tool_calls=True)
+    _, vec, _ = c.lookup("reasoner", "m1", "compute 192 * 3.2", "")
+    assert c.store("reasoner", "m1", vec, _tool_resp({"expression": "192 * 3.2"})) is False
+    hit, _, _ = c.lookup("reasoner", "m1", "compute 192 * 3.2", "")
+    assert hit is None
+    # final text and argument-free calls are still cached
+    assert c.store("reasoner", "m1", vec, _resp("ANSWER: 614.4")) is True
+    assert c.store("orchestrator", "m1", vec, _tool_resp({})) is True
+
+
+def test_skip_tool_calls_refuses_to_serve_existing_action_entries():
+    backend = InMemoryBackend()
+    loose = SemanticCache(backend, HashingEmbedder())
+    _, vec, _ = loose.lookup("reasoner", "m1", "compute 192 * 3.2", "")
+    assert loose.store("reasoner", "m1", vec, _tool_resp({"expression": "192 * 3.2"}))
+    hit, _, _ = loose.lookup("reasoner", "m1", "compute 192 * 3.2", "")
+    assert hit is not None and hit.response.tool_calls  # default: action calls are served
+
+    strict = SemanticCache(backend, HashingEmbedder(), skip_tool_calls=True)
+    hit, _, _ = strict.lookup("reasoner", "m1", "compute 192 * 3.2", "")
+    assert hit is None
+    assert strict.stats.tool_call_entries_refused["reasoner"] == 1
