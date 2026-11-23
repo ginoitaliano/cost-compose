@@ -96,6 +96,8 @@ make run      # Table 1 configs + ablations, seeds 0 1 2 -> results/full/
 make report   # rebuild summary.md / summary.json from runs.jsonl
 ```
 
+GAIA tasks come from the validation split only, because it is the only split with public answers. `prepare_gaia.py` excludes tasks the pipeline cannot attempt. Its tools are a calculator and search over the local corpus, so it drops tasks that need web browsing, tasks with an attached file it cannot read (any attachment by default; `--readable-extensions` allows some), and tasks that need multimodal input. The decision uses GAIA's metadata: the `file_name` field and the annotators' tool list, plus URLs or YouTube links in the question. Exclusion counts by reason are printed and written to `<out>.exclusions.json`, which holds counts only, no task content. Tasks with no annotator tool list are kept and counted so they can be reviewed by hand. If fewer than 20 eligible tasks remain in a stratum, the script warns rather than padding.
+
 Runs are resumable: `runs.jsonl` is appended one task at a time, and a rerun skips every (config, seed, task) already recorded. A failed task is logged with its error and scored as a failure rather than stopping the run.
 
 Run any subset directly:
