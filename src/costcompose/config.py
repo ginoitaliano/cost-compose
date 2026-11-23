@@ -90,9 +90,15 @@ class AgentConfig:
     temperature: float = 0.2
 
 
+MODES = ("multi_agent", "single_agent")
+
+
 @dataclass
 class ExperimentConfig:
     name: str
+    # multi_agent: orchestrator -> (retriever -> reasoner) x N -> aggregator (the paper's pipeline)
+    # single_agent: one reasoning agent with retrieval and tools as functions (H3 comparison arm)
+    mode: str = "multi_agent"
     caching: CachingConfig = field(default_factory=CachingConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     early_stopping: EarlyStoppingConfig = field(default_factory=EarlyStoppingConfig)
@@ -142,6 +148,7 @@ def from_dict(data: dict[str, Any]) -> ExperimentConfig:
     prices = {m: ModelPrice(**p) for m, p in data.get("prices", {}).items()}
     cfg = ExperimentConfig(
         name=data["name"],
+        mode=data.get("mode", "multi_agent"),
         caching=CachingConfig(**data.get("caching", {})),
         routing=RoutingConfig(**routing),
         early_stopping=EarlyStoppingConfig(**data.get("early_stopping", {})),
@@ -159,6 +166,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
 
 
 def validate(cfg: ExperimentConfig) -> None:
+    if cfg.mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {cfg.mode!r}")
     if cfg.caching.scope not in {"agent", "pipeline"}:
         raise ValueError(f"caching.scope must be 'agent' or 'pipeline', got {cfg.caching.scope!r}")
     if cfg.caching.backend not in {"memory", "redis"}:

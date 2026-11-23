@@ -195,7 +195,7 @@ class FakeLLMClient:
             content = json.dumps([f"Step {i + 1}: {user[:80]}" for i in range(n)])
         elif role == "retriever":
             content = "RELEVANT: " + user[:200]
-        elif role == "reasoner":
+        elif role in ("reasoner", "single"):
             already_used_tool = any(m["role"] == "tool" for m in messages)
             expr = re.search(r"(\d+(?:\.\d+)?\s*[-+*/]\s*\d+(?:\.\d+)?)", user)
             iteration = sum(1 for m in messages if m["role"] == "assistant")

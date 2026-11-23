@@ -70,11 +70,13 @@ def test_langgraph_engine_matches_native():
     if importlib.util.find_spec("langgraph") is None:
         return  # optional dependency; exercised in CI's "full" job
     task = load_tasks(SAMPLE_TASKS)[4]
-    a = run_task(_runtime("composed"), task, engine="native")
-    b = run_task(_runtime("composed"), task, engine="langgraph")
-    assert b["error"] is None, b["error"]
-    for k in ("prediction", "llm_calls", "cache_hits", "routing", "subtasks"):
-        assert a[k] == b[k], k
+    for name in ("composed", "single_agent_baseline", "single_agent_route"):
+        a = run_task(_runtime(name), task, engine="native")
+        b = run_task(_runtime(name), task, engine="langgraph")
+        assert b["error"] is None, (name, b["error"])
+        for k in ("prediction", "llm_calls", "cache_hits", "routing", "subtasks",
+                  "early_stops", "cache_induced_early_stops", "entity_mismatch_hits"):
+            assert a[k] == b[k], (name, k)
 
 
 def test_cli_dry_run_end_to_end_and_resume():
@@ -139,3 +141,33 @@ def test_skip_tool_calls_in_pipeline():
     run_task(loose, task, engine="native")
     stored = [p for ps in loose.cache.backend._payloads.values() for p in ps]
     assert any(tc["arguments"] for p in stored for tc in p["response"]["tool_calls"])
+
+
+def test_single_agent_mode_runs_one_agent_through_the_choke_point():
+    task = Task("t1", "Charter teams get 192 GPU-hours a week. What is 192 * 3.2?", "614.4", "high")
+    rec = run_task(_runtime("single_agent_baseline"), task, engine="native")
+    assert rec["error"] is None
+    assert set(rec["requests_by_agent"]) == {"single_agent"}  # no orchestrator, no retriever
+    assert rec["subtasks"] == 1 and rec["tool_invocations"] >= 1
+    assert rec["prediction"] and rec["cost_usd"] > 0
+    assert set(rec["routing"]) == {"gpt-4o"}
+
+    routed = run_task(_runtime("single_agent_route"), task, engine="native")
+    assert routed["error"] is None and "gpt-4o" not in routed["routing"]
+    assert routed["cost_usd"] < rec["cost_usd"]
+
+
+def test_single_agent_h3_comparison_in_report():
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        abl = CONFIGS / "ablations"
+        args = ["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks", str(SAMPLE_TASKS),
+                "--corpus", str(SAMPLE_CORPUS), "--seeds", "0", "--out", str(out),
+                "--configs", "baseline", "route_only", str(abl / "single_agent_baseline.yaml"),
+                str(abl / "single_agent_route.yaml")]
+        assert main(args) == 0
+        rows = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines()]
+        assert {r["mode"] for r in rows if r["config"].startswith("single")} == {"single_agent"}
+        h3 = json.loads((out / "summary.json").read_text())["hypotheses"]["H3_routing_success_drop"]
+        assert set(h3) == {"multi_agent", "single_agent", "multi_minus_single"}
+        assert h3["single_agent"]["by_stratum"]["high"]["n_tasks"] == 3

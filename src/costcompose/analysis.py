@@ -324,6 +324,7 @@ PARENTS = {
     "composed_model_aware": "composed",
     "composed_exclude_cached_drafts": "composed",
     "composed_skip_tool_calls": "composed",
+    "single_agent_route": "single_agent_baseline",
 }
 
 
@@ -388,38 +389,83 @@ def _comparisons(configs: dict[str, Any], records: list[dict[str, Any]]) -> list
     return [x for x in (compare(records, a, b) for a, b in pairs) if x is not None]
 
 
-def _h3_drop(
-    records: list[dict[str, Any]], base: str, routed: str
-) -> tuple[dict[str, Any], dict[str, np.ndarray]] | None:
-    """Success drop (base - routed) per complexity stratum, stratified paired bootstrap."""
-    tasks, m = _paired_matrix(records, [base, routed], "success")
+def _h3(
+    records: list[dict[str, Any]], settings: dict[str, tuple[str, str]]
+) -> tuple[dict[str, Any], dict[str, dict[str, np.ndarray]]] | None:
+    """Routing success drop (no routing - routing) per complexity stratum, for each setting.
+
+    ``settings`` maps a name (e.g. "multi_agent") to (config without routing, config with
+    routing). All settings use the tasks they share, and every stratum is resampled with the
+    same task indices for all settings, so differences between settings stay paired.
+    """
+    names = [c for pair in settings.values() for c in pair]
+    tasks, m = _paired_matrix(records, names, "success")
     if not tasks:
         return None
     cx_of = {r["task_id"]: r["complexity"] for r in records}
     rng = np.random.default_rng(BOOT_SEED)
-    by: dict[str, Any] = {}
-    boots: dict[str, np.ndarray] = {}
+    out: dict[str, Any] = {
+        k: {"baseline_config": b, "routed_config": r, "by_stratum": {}}
+        for k, (b, r) in settings.items()
+    }
+    boots: dict[str, dict[str, np.ndarray]] = {k: {} for k in settings}
     for cx in ("low", "medium", "high"):
         sel = [i for i, t in enumerate(tasks) if cx_of[t] == cx]
         if not sel:
             continue
-        sub = m[:, sel]
         idx = rng.integers(0, len(sel), size=(N_BOOT, len(sel)))
-        boots[cx] = sub[0][idx].mean(axis=1) - sub[1][idx].mean(axis=1)
-        by[cx] = {
-            "n_tasks": len(sel),
-            "baseline_success": float(sub[0].mean()),
-            "routed_success": float(sub[1].mean()),
-            "drop": float(sub[0].mean() - sub[1].mean()),
-            "drop_ci95": _ci95(boots[cx]),
-        }
-    out: dict[str, Any] = {"baseline_config": base, "routed_config": routed, "by_stratum": by}
-    if "high" in by and "low" in by:
-        out["high_minus_low"] = {
-            "estimate": by["high"]["drop"] - by["low"]["drop"],
-            "ci95": _ci95(boots["high"] - boots["low"]),
-        }
+        for j, name in enumerate(settings):
+            base, routed = m[2 * j][sel], m[2 * j + 1][sel]
+            boots[name][cx] = base[idx].mean(axis=1) - routed[idx].mean(axis=1)
+            out[name]["by_stratum"][cx] = {
+                "n_tasks": len(sel),
+                "baseline_success": float(base.mean()),
+                "routed_success": float(routed.mean()),
+                "drop": float(base.mean() - routed.mean()),
+                "drop_ci95": _ci95(boots[name][cx]),
+            }
+    for name, res in out.items():
+        by = res["by_stratum"]
+        if "high" in by and "low" in by:
+            res["high_minus_low"] = {
+                "estimate": by["high"]["drop"] - by["low"]["drop"],
+                "ci95": _ci95(boots[name]["high"] - boots[name]["low"]),
+            }
     return out, boots
+
+
+def _h3_drop(
+    records: list[dict[str, Any]], base: str, routed: str
+) -> tuple[dict[str, Any], dict[str, np.ndarray]] | None:
+    res = _h3(records, {"setting": (base, routed)})
+    return None if res is None else (res[0]["setting"], res[1]["setting"])
+
+
+def _h3_test(records: list[dict[str, Any]], configs: dict[str, Any]) -> dict[str, Any] | None:
+    settings = {}
+    if "baseline" in configs and "route_only" in configs:
+        settings["multi_agent"] = ("baseline", "route_only")
+    if "single_agent_baseline" in configs and "single_agent_route" in configs:
+        settings["single_agent"] = ("single_agent_baseline", "single_agent_route")
+    if not settings:
+        return None
+    res = _h3(records, settings)
+    if res is None:
+        return None
+    out, boots = res
+    if all("high_minus_low" in out.get(k, {}) for k in ("multi_agent", "single_agent")):
+        diff = {
+            k: boots[k]["high"] - boots[k]["low"] for k in ("multi_agent", "single_agent")
+        }
+        out["multi_minus_single"] = {
+            "description": "multi-agent high-minus-low drop minus single-agent high-minus-low "
+                           "drop; > 0 means routing hurts complex tasks more in the multi-agent "
+                           "pipeline than in the single agent",
+            "estimate": out["multi_agent"]["high_minus_low"]["estimate"]
+            - out["single_agent"]["high_minus_low"]["estimate"],
+            "ci95": _ci95(diff["multi_agent"] - diff["single_agent"]),
+        }
+    return out
 
 
 def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -463,10 +509,9 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
             }
     if learned:
         out["learned_vs_heuristic_routing"] = learned
-    if "baseline" in configs and "route_only" in configs:
-        multi = _h3_drop(records, "baseline", "route_only")
-        if multi is not None:
-            out["H3_routing_success_drop"] = {"multi_agent": multi[0]}
+    h3 = _h3_test(records, configs)
+    if h3 is not None:
+        out["H3_routing_success_drop"] = h3
     return out
 
 

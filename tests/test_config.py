@@ -55,3 +55,18 @@ def test_circular_extends_rejected():
             assert "circular" in str(e)
         else:
             raise AssertionError("expected ValueError")
+
+
+def test_mode_defaults_and_validation():
+    assert cfg("baseline").mode == "multi_agent"
+    assert cfg("single_agent_baseline").mode == "single_agent"
+    assert cfg("single_agent_route").routing.enabled
+    raw = {"name": "x", "mode": "swarm",
+           "prices": {"gpt-4o": {"input_per_mtok": 1, "output_per_mtok": 1},
+                      "text-embedding-3-small": {"input_per_mtok": 1, "output_per_mtok": 0}}}
+    try:
+        from_dict(raw)
+    except ValueError as e:
+        assert "mode" in str(e)
+    else:
+        raise AssertionError("expected ValueError")

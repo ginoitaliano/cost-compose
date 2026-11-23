@@ -114,3 +114,18 @@ def test_report_prints_sample_sizes():
     assert "50.0 ± 0.0% (n=10)" in md  # success rate with task runs
     assert "(n=40 requests)" in md  # routing share
     assert "## Paired comparisons" in md
+
+
+def test_h3_multi_minus_single_is_paired():
+    recs = _success_records({
+        "baseline": {"low": 0.9, "high": 0.8}, "route_only": {"low": 0.85, "high": 0.4},
+        "single_agent_baseline": {"low": 0.9, "high": 0.8},
+        "single_agent_route": {"low": 0.85, "high": 0.7},
+    })
+    configs = {c: {} for c in ("baseline", "route_only", "single_agent_baseline",
+                               "single_agent_route")}
+    h3 = analysis._h3_test(recs, configs)
+    assert abs(h3["multi_agent"]["high_minus_low"]["estimate"] - 0.35) < 1e-9
+    assert abs(h3["single_agent"]["high_minus_low"]["estimate"] - 0.05) < 1e-9
+    mms = h3["multi_minus_single"]
+    assert abs(mms["estimate"] - 0.30) < 1e-9 and mms["ci95"][0] > 0
