@@ -1,14 +1,23 @@
 """Aggregate per-task records into per-configuration results and hypothesis checks.
 
-Statistics: metrics are computed per (config, seed), then reported as mean and standard
-deviation across seeds, matching the paper's protocol. Comparisons between configurations use
-paired resampling over tasks: every configuration runs the same tasks, so the unit of
-resampling is the task (with all of its seeds), not the seed.
+Headline statistics are paired comparisons over tasks. Every configuration runs the same
+tasks with the same seeds, so:
+
+* success: exact McNemar test on (task, seed) pairs, plus a paired bootstrap CI on the
+  success-rate difference;
+* cost and latency: paired bootstrap over tasks (each task's value averaged over its seeds),
+  10,000 resamples with a fixed seed, 95% percentile CIs;
+* H3: per-stratum success drop under routing with a stratified bootstrap CI, and a CI on the
+  difference-of-differences (high-stratum drop minus low-stratum drop).
+
+Per-config descriptives (mean and std across seeds, the paper's protocol) are still reported,
+below the paired comparisons. Every rate is printed with its sample size.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -221,6 +230,22 @@ def _cache_early_stop(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _sample_sizes(seeds: dict[int, list[dict]], techniques: dict[str, bool]) -> dict[str, Any]:
+    rows = [r for rs in seeds.values() for r in rs]
+    routed: Counter = Counter()
+    for r in rows:
+        routed.update(r["routing"])
+    first = sorted(seeds)[0]
+    quarters = [len(c) for c in np.array_split(np.arange(len(seeds[first])), 4) if len(c)]
+    return {
+        "task_runs": len(rows),  # tasks x seeds: denominator of success_rate
+        "cache_lookups": sum(r["requests"] for r in rows) if techniques.get("caching") else 0,
+        "routed_requests": sum(routed.values()),
+        "by_complexity": dict(sorted(Counter(r["complexity"] for r in rows).items())),
+        "learning_curve_task_runs": [q * len(seeds) for q in quarters],
+    }
+
+
 def _learning_curve(rows: list[dict[str, Any]], bins: int = 4) -> list[dict[str, float]]:
     """Success and cost per task over successive quarters of the task stream (one seed)."""
     rows = sorted(rows, key=lambda r: r.get("position", 0))
@@ -276,6 +301,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 if techniques[name].get("caching") else None
             ),
             "n_tasks": per_seed[0]["n_tasks"],
+            "n": _sample_sizes(seeds, techniques[name]),
             "errors": sum(p["errors"] for p in per_seed),
             **{k: _mean_std([p[k] for p in per_seed]) for k in SCALARS},
             **{
@@ -283,7 +309,117 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 for k in ("cache_hit_rate_by_agent", "routing_share", "success_by_complexity")
             },
         }
-    return {"configs": configs, "hypotheses": hypotheses(configs, records)}
+    return {
+        "configs": configs,
+        "comparisons": _comparisons(configs, records),
+        "hypotheses": hypotheses(configs, records),
+    }
+
+
+# Ablation -> the config it modifies. Each is compared with its parent as well as with baseline.
+PARENTS = {
+    "cache_only_pipeline": "cache_only",
+    "learned_route": "route_only",
+    "composed_learned": "composed",
+    "composed_model_aware": "composed",
+    "composed_exclude_cached_drafts": "composed",
+    "composed_skip_tool_calls": "composed",
+}
+
+
+def _mcnemar_exact(ref: list[bool], cfg: list[bool]) -> dict[str, Any]:
+    """Two-sided exact McNemar test: binomial test on the discordant pairs."""
+    ref_only = sum(1 for a, b in zip(ref, cfg, strict=True) if a and not b)
+    cfg_only = sum(1 for a, b in zip(ref, cfg, strict=True) if b and not a)
+    n = ref_only + cfg_only
+    if n == 0:
+        p = 1.0
+    else:
+        k = min(ref_only, cfg_only)
+        p = min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2**n)
+    return {"n_pairs": len(ref), "reference_only_success": ref_only,
+            "config_only_success": cfg_only, "p_value": float(p)}
+
+
+def _paired_delta(
+    records: list[dict[str, Any]], ref: str, cfg: str, key: str, relative: bool = False
+) -> dict[str, Any] | None:
+    tasks, m = _paired_matrix(records, [ref, cfg], key)
+    if not tasks:
+        return None
+    idx = _boot_index(len(tasks))
+    b_ref, b_cfg = m[0][idx].mean(axis=1), m[1][idx].mean(axis=1)
+    out = {
+        "n_tasks": len(tasks),
+        "reference_mean": float(m[0].mean()),
+        "config_mean": float(m[1].mean()),
+        "delta": float(m[1].mean() - m[0].mean()),
+        "delta_ci95": _ci95(b_cfg - b_ref),
+    }
+    if relative:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["relative"] = float(m[1].mean() / m[0].mean() - 1) if m[0].mean() else None
+            out["relative_ci95"] = _ci95(b_cfg / b_ref - 1)
+    return out
+
+
+def compare(records: list[dict[str, Any]], ref: str, cfg: str) -> dict[str, Any] | None:
+    """Paired comparison of ``cfg`` against ``ref`` on the tasks and seeds both ran."""
+    a = {(r["task_id"], r["seed"]): bool(r["success"]) for r in records if r["config"] == ref}
+    b = {(r["task_id"], r["seed"]): bool(r["success"]) for r in records if r["config"] == cfg}
+    keys = sorted(set(a) & set(b))
+    if not keys:
+        return None
+    return {
+        "reference": ref,
+        "config": cfg,
+        "success": {
+            **_paired_delta(records, ref, cfg, "success"),
+            "mcnemar": _mcnemar_exact([a[k] for k in keys], [b[k] for k in keys]),
+        },
+        "cost_usd": _paired_delta(records, ref, cfg, "cost_usd", relative=True),
+        "latency_s": _paired_delta(records, ref, cfg, "latency_s"),
+    }
+
+
+def _comparisons(configs: dict[str, Any], records: list[dict[str, Any]]) -> list[dict]:
+    pairs = [("baseline", c) for c in configs if c != "baseline" and "baseline" in configs]
+    pairs += [(p, c) for c, p in PARENTS.items() if c in configs and p in configs]
+    return [x for x in (compare(records, a, b) for a, b in pairs) if x is not None]
+
+
+def _h3_drop(
+    records: list[dict[str, Any]], base: str, routed: str
+) -> tuple[dict[str, Any], dict[str, np.ndarray]] | None:
+    """Success drop (base - routed) per complexity stratum, stratified paired bootstrap."""
+    tasks, m = _paired_matrix(records, [base, routed], "success")
+    if not tasks:
+        return None
+    cx_of = {r["task_id"]: r["complexity"] for r in records}
+    rng = np.random.default_rng(BOOT_SEED)
+    by: dict[str, Any] = {}
+    boots: dict[str, np.ndarray] = {}
+    for cx in ("low", "medium", "high"):
+        sel = [i for i, t in enumerate(tasks) if cx_of[t] == cx]
+        if not sel:
+            continue
+        sub = m[:, sel]
+        idx = rng.integers(0, len(sel), size=(N_BOOT, len(sel)))
+        boots[cx] = sub[0][idx].mean(axis=1) - sub[1][idx].mean(axis=1)
+        by[cx] = {
+            "n_tasks": len(sel),
+            "baseline_success": float(sub[0].mean()),
+            "routed_success": float(sub[1].mean()),
+            "drop": float(sub[0].mean() - sub[1].mean()),
+            "drop_ci95": _ci95(boots[cx]),
+        }
+    out: dict[str, Any] = {"baseline_config": base, "routed_config": routed, "by_stratum": by}
+    if "high" in by and "low" in by:
+        out["high_minus_low"] = {
+            "estimate": by["high"]["drop"] - by["low"]["drop"],
+            "ci95": _ci95(boots["high"] - boots["low"]),
+        }
+    return out, boots
 
 
 def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -300,6 +436,8 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
         out["H2_pipeline_vs_agent_cache"] = {
             "agent_scope_hit_rate": configs["cache_only"]["cache_hit_rate"]["mean"],
             "pipeline_scope_hit_rate": configs["cache_only_pipeline"]["cache_hit_rate"]["mean"],
+            "agent_scope_lookups_n": configs["cache_only"]["n"]["cache_lookups"],
+            "pipeline_scope_lookups_n": configs["cache_only_pipeline"]["n"]["cache_lookups"],
             "agent_scope_entity_mismatch_share": agent_cc.get("entity_mismatch_share_of_hits"),
             "pipeline_scope_entity_mismatch_share": pipe_cc.get(
                 "entity_mismatch_share_of_hits"
@@ -321,15 +459,14 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
                 if configs[heur]["cost_usd"]["mean"] else None,
                 "success_delta": configs[lrn]["success_rate"]["mean"]
                 - configs[heur]["success_rate"]["mean"],
+                "paired": compare(records, heur, lrn),
             }
     if learned:
         out["learned_vs_heuristic_routing"] = learned
     if "baseline" in configs and "route_only" in configs:
-        base = configs["baseline"]["success_by_complexity"]
-        routed = configs["route_only"]["success_by_complexity"]
-        out["H3_routing_success_drop"] = {
-            cx: base[cx]["mean"] - routed[cx]["mean"] for cx in base if cx in routed
-        }
+        multi = _h3_drop(records, "baseline", "route_only")
+        if multi is not None:
+            out["H3_routing_success_drop"] = {"multi_agent": multi[0]}
     return out
 
 
@@ -430,49 +567,134 @@ def _h1_markdown(h1: dict[str, Any] | None) -> list[str]:
     return lines
 
 
+def _fmt_n(ms: dict[str, float], n: int, pct: bool = False) -> str:
+    return f"{_fmt(ms, pct=pct)} (n={n})"
+
+
+def _p(x: float) -> str:
+    return "<0.001" if x < 0.001 else f"{x:.3f}"
+
+
+def _comparisons_markdown(comparisons: list[dict[str, Any]]) -> list[str]:
+    if not comparisons:
+        return []
+    lines = [
+        "## Paired comparisons", "",
+        "Each row compares a config with a reference on the tasks and seeds both ran. Success: "
+        "exact McNemar test on (task, seed) pairs, and the success-rate difference with a 95% "
+        "paired bootstrap CI over tasks. Cost and latency: per-task means over seeds, difference "
+        "(config - reference) with a 95% paired bootstrap CI over tasks "
+        f"({N_BOOT:,} resamples, seed {BOOT_SEED}).", "",
+        "| Config | Reference | Success: ref -> config | Success diff (95% CI) "
+        "| McNemar p (discordant ref/config, n pairs) | Cost diff / task (95% CI) "
+        "| Cost relative (95% CI) | Latency diff, s (95% CI) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in comparisons:
+        s, cost, lat, mc = c["success"], c["cost_usd"], c["latency_s"], c["success"]["mcnemar"]
+        rel = "–" if cost["relative"] is None else (
+            f"{100 * cost['relative']:+.1f}% {_pct_ci(cost['relative_ci95'])}"
+        )
+        lines.append(
+            f"| {c['config']} | {c['reference']} "
+            f"| {100 * s['reference_mean']:.1f}% -> {100 * s['config_mean']:.1f}% "
+            f"(n={s['n_tasks']} tasks) "
+            f"| {100 * s['delta']:+.1f} pp {_pct_ci(s['delta_ci95'])} "
+            f"| {_p(mc['p_value'])} ({mc['reference_only_success']}/{mc['config_only_success']}, "
+            f"n={mc['n_pairs']}) "
+            f"| ${cost['delta']:+.4f} [{cost['delta_ci95'][0]:+.4f}, {cost['delta_ci95'][1]:+.4f}] "
+            f"| {rel} "
+            f"| {lat['delta']:+.2f} [{lat['delta_ci95'][0]:+.2f}, {lat['delta_ci95'][1]:+.2f}] |"
+        )
+    return lines
+
+
+def _h3_markdown(h3: dict[str, Any] | None) -> list[str]:
+    if not h3:
+        return []
+    lines = [
+        "", "## H3: routing success drop by complexity", "",
+        "Drop = success without routing minus success with routing, per task averaged over "
+        "seeds. 95% CIs from a bootstrap that resamples tasks within each stratum.", "",
+        "| Setting | Stratum | Success without routing | Success with routing "
+        "| Drop (95% CI) |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    settings = [(k, v) for k, v in h3.items() if isinstance(v, dict) and "by_stratum" in v]
+    for name, res in settings:
+        for cx, d in res["by_stratum"].items():
+            lines.append(
+                f"| {name} ({res['routed_config']} vs {res['baseline_config']}) | {cx} "
+                f"| {100 * d['baseline_success']:.1f}% (n={d['n_tasks']}) "
+                f"| {100 * d['routed_success']:.1f}% (n={d['n_tasks']}) "
+                f"| {100 * d['drop']:+.1f} pp {_pct_ci(d['drop_ci95'])} |"
+            )
+    lines += ["", "| Setting | High-stratum drop minus low-stratum drop (95% CI) |",
+              "| --- | --- |"]
+    for name, res in settings:
+        if "high_minus_low" in res:
+            d = res["high_minus_low"]
+            lines.append(f"| {name} | {100 * d['estimate']:+.1f} pp {_pct_ci(d['ci95'])} |")
+    if "multi_minus_single" in h3:
+        d = h3["multi_minus_single"]
+        lines += ["", "Multi-agent minus single-agent difference-of-differences: "
+                  f"{100 * d['estimate']:+.1f} pp, 95% CI {_pct_ci(d['ci95'])}."]
+    return lines
+
+
 def to_markdown(summary: dict[str, Any]) -> str:
     cfgs = summary["configs"]
     order = [c for c in ("baseline", "cache_only", "route_only", "composed") if c in cfgs]
     order += sorted(c for c in cfgs if c not in order)
-    lines = [
-        "# Results",
-        "",
-        "Mean ± std across seeds. Cost is USD per task at each model's own price.",
+    hyp = summary["hypotheses"]
+    lines = ["# Results", ""]
+    lines += _comparisons_markdown(summary.get("comparisons", []))
+    lines += _h1_markdown(hyp.get("H1_sub_additive"))
+    lines += _h3_markdown(hyp.get("H3_routing_success_drop"))
+    lines += _e4_markdown(hyp.get("E4_cache_induced_early_stops"))
+    lines += _cache_markdown(cfgs, order)
+    lines += [
+        "", "## Per-config descriptives", "",
+        "Mean ± std across seeds. Cost is USD per task at each model's own price. n is task runs "
+        "(tasks x seeds) for success and cache lookups for the cache hit rate.",
         "",
         "| Config | Cost / task | P50 latency (s) | P95 latency (s) | Success | Cache hit "
         "| LLM calls / task |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for c in order:
-        r = cfgs[c]
+        r, n = cfgs[c], cfgs[c]["n"]
+        hit = _fmt_n(r["cache_hit_rate"], n["cache_lookups"], pct=True) \
+            if n["cache_lookups"] else "–"
         lines.append(
             f"| {c} | {_fmt(r['cost_usd'], money=True)} | {_fmt(r['latency_p50_s'])} "
-            f"| {_fmt(r['latency_p95_s'])} | {_fmt(r['success_rate'], pct=True)} "
-            f"| {_fmt(r['cache_hit_rate'], pct=True)} | {_fmt(r['llm_calls_per_task'])} |"
+            f"| {_fmt(r['latency_p95_s'])} | {_fmt_n(r['success_rate'], n['task_runs'], True)} "
+            f"| {hit} | {_fmt(r['llm_calls_per_task'])} |"
         )
-    lines += ["", "## Success by complexity", "", "| Config | low | medium | high |",
-              "| --- | --- | --- | --- |"]
+    lines += ["", "## Success by complexity", "",
+              "Mean ± std across seeds; n is task runs in the stratum (tasks x seeds).", "",
+              "| Config | low | medium | high |", "| --- | --- | --- | --- |"]
     for c in order:
-        sbc = cfgs[c]["success_by_complexity"]
-        cells = [_fmt(sbc[k], pct=True) if k in sbc else "–" for k in ("low", "medium", "high")]
+        sbc, n = cfgs[c]["success_by_complexity"], cfgs[c]["n"]["by_complexity"]
+        cells = [_fmt_n(sbc[k], n.get(k, 0), pct=True) if k in sbc else "–"
+                 for k in ("low", "medium", "high")]
         lines.append(f"| {c} | " + " | ".join(cells) + " |")
     lines += ["", "## Routing share", ""]
     for c in order:
         routing = cfgs[c]["routing_share"].items()
         share = ", ".join(f"{m}: {100 * v['mean']:.0f}%" for m, v in routing)
-        lines.append(f"- {c}: {share}")
+        lines.append(f"- {c} (n={cfgs[c]['n']['routed_requests']} requests): {share}")
     learners = [c for c in order if cfgs[c].get("routing_policy") == "linucb"]
     if learners:
         lines += ["", "## Learned router: learning curve", "",
-                  "Task stream split into quarters (per seed, then averaged).", "",
+                  "Task stream split into quarters (per seed, then averaged). n is task runs "
+                  "in the quarter across seeds.", "",
                   "| Config | Quarter | Success | Cost / task |", "| --- | --- | --- | --- |"]
         for c in learners:
+            ns = cfgs[c]["n"]["learning_curve_task_runs"]
             for i, q in enumerate(cfgs[c]["learning_curve"], 1):
-                lines.append(f"| {c} | {i} | {_fmt(q['success_rate'], pct=True)} "
+                lines.append(f"| {c} | {i} | {_fmt_n(q['success_rate'], ns[i - 1], pct=True)} "
                              f"| {_fmt(q['cost_usd'], money=True)} |")
-    lines += _cache_markdown(cfgs, order)
-    lines += _h1_markdown(summary["hypotheses"].get("H1_sub_additive"))
-    lines += _e4_markdown(summary["hypotheses"].get("E4_cache_induced_early_stops"))
-    lines += ["", "## Hypothesis checks", "", "```json"]
-    lines += [json.dumps(summary["hypotheses"], indent=2), "```", ""]
+    lines += ["", "## Hypothesis checks (raw)", "", "```json"]
+    lines += [json.dumps(hyp, indent=2), "```", ""]
     return "\n".join(lines)
