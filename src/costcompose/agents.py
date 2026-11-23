@@ -152,15 +152,22 @@ def retrieve_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
     return {"context": resp.content}
 
 
-def reason_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
-    idx = state["index"]
-    sub = state["subtasks"][idx]
-    user = (
-        f"Task: {state['question']}\nSubtask: {sub}\n\nContext:\n{state['context']}"
-        f"\n\nEarlier results:\n{_upstream(state)}"
-    )
+def _reasoning_loop(
+    rt: Runtime,
+    agent: str,
+    system: str,
+    user: str,
+    query: str,
+    depth: int,
+    pipeline_context: str,
+) -> list[str]:
+    """Draft / tool-call / refine loop with early stopping. Returns the drafts produced.
+
+    Shared by the multi-agent reasoner and the single agent so both run the same stop rule,
+    tool handling and cache instrumentation.
+    """
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": prompts.REASONER},
+        {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
     drafts: list[str] = []
@@ -169,10 +176,9 @@ def reason_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
     tools_used = 0
     for _ in range(rt.cfg.agents.max_iterations):
         context_tokens = sum(approx_tokens(str(m.get("content") or "")) for m in messages)
-        feats = ComplexityFeatures(approx_tokens(sub), tools_used, context_tokens, idx + 1)
+        feats = ComplexityFeatures(approx_tokens(query), tools_used, context_tokens, depth)
         local = user + "\n" + "\n".join(transcript)
-        resp = rt.call_llm("reasoner", messages, feats, local, _pipeline_context(state),
-                           use_tools=True)
+        resp = rt.call_llm(agent, messages, feats, local, pipeline_context, use_tools=True)
         if resp.tool_calls:
             messages.append({
                 "role": "assistant",
@@ -214,9 +220,36 @@ def reason_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
             break
         messages.append({"role": "assistant", "content": resp.content})
         messages.append({"role": "user", "content": prompts.REFINE})
+    return drafts
 
+
+def reason_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
+    idx = state["index"]
+    sub = state["subtasks"][idx]
+    user = (
+        f"Task: {state['question']}\nSubtask: {sub}\n\nContext:\n{state['context']}"
+        f"\n\nEarlier results:\n{_upstream(state)}"
+    )
+    drafts = _reasoning_loop(rt, "reasoner", prompts.REASONER, user, sub, idx + 1,
+                             _pipeline_context(state))
     answer = extract_answer(drafts[-1]) if drafts else ""
     return {"outputs": [*state["outputs"], answer], "index": idx + 1}
+
+
+def single_agent_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
+    """H3 comparison arm: one reasoning agent, retrieval and tools as functions, no orchestrator.
+
+    Every LLM request still goes through ``Runtime.call_llm``, so caching, routing, early
+    stopping and metering behave exactly as in the multi-agent pipeline. There is no upstream
+    agent, so the dependency-depth routing feature is 0 for every call.
+    """
+    q = state["question"]
+    user = f"Task: {q}"
+    rt.trace.subtasks = 1
+    drafts = _reasoning_loop(rt, "single_agent", prompts.SINGLE_AGENT, user, q, 0, user)
+    answer = extract_answer(drafts[-1]) if drafts else ""
+    return {"subtasks": [q], "index": 1, "outputs": [answer], "context": "",
+            "final": f"FINAL ANSWER: {answer}" if answer else ""}
 
 
 def aggregate_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:

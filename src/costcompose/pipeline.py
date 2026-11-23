@@ -1,6 +1,7 @@
 """Pipeline engines and single-task execution.
 
-Graph: plan -> (retrieve -> reason) x N subtasks -> aggregate
+Graph (mode multi_agent): plan -> (retrieve -> reason) x N subtasks -> aggregate
+Graph (mode single_agent): single_agent (one reasoning loop with retrieval and tools as functions)
 
 ``engine="langgraph"`` compiles that graph with LangGraph (as in the paper; LangSmith tracing is
 picked up from the standard LANGSMITH_* environment variables). ``engine="native"`` walks the same
@@ -14,7 +15,14 @@ import importlib.util
 from functools import partial
 from typing import Any, TypedDict
 
-from .agents import Runtime, aggregate_node, plan_node, reason_node, retrieve_node
+from .agents import (
+    Runtime,
+    aggregate_node,
+    plan_node,
+    reason_node,
+    retrieve_node,
+    single_agent_node,
+)
 from .evaluation import extract_final_answer, score
 from .tasks import Task
 from .tracking import TaskTrace
@@ -39,6 +47,8 @@ def resolve_engine(engine: str) -> str:
 
 
 def run_native(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
+    if rt.cfg.mode == "single_agent":
+        return {**state, **single_agent_node(rt, state)}
     state = {**state, **plan_node(rt, state)}
     while state["index"] < len(state["subtasks"]):
         state = {**state, **retrieve_node(rt, state)}
@@ -50,6 +60,11 @@ def build_langgraph(rt: Runtime):
     from langgraph.graph import END, START, StateGraph
 
     g = StateGraph(PipelineState)
+    if rt.cfg.mode == "single_agent":
+        g.add_node("single_agent", partial(single_agent_node, rt))
+        g.add_edge(START, "single_agent")
+        g.add_edge("single_agent", END)
+        return g.compile()
     g.add_node("plan", partial(plan_node, rt))
     g.add_node("retrieve", partial(retrieve_node, rt))
     g.add_node("reason", partial(reason_node, rt))

@@ -1,0 +1,6 @@
+# H3 comparison arm with routing on. The success drop single_agent_baseline -> single_agent_route
+# per stratum is the measured single-agent routing drop that H3 compares the multi-agent drop
+# (baseline -> route_only) against. The single agent's dependency-depth feature is always 0.
+extends: single_agent_baseline.yaml
+name: single_agent_route
+routing: {enabled: true}

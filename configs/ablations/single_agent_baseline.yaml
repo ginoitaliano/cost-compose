@@ -1,0 +1,5 @@
+# H3 comparison arm. One reasoning agent with retrieval (search_docs) and the calculator as
+# functions, no orchestrator, no techniques. Same models, prices, loop cap and seeds as baseline.
+extends: ../base.yaml
+name: single_agent_baseline
+mode: single_agent

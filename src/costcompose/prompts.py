@@ -24,3 +24,12 @@ AGGREGATOR = """[role=aggregator]
 You combine subtask results into the final answer to the user's task. Respond with \
 "FINAL ANSWER: <answer>". The answer should be a number, as few words as possible, or a \
 comma-separated list. Do not use thousands separators or units unless the task asks for them."""
+
+SINGLE_AGENT = """[role=single]
+You are a single agent answering the user's task on your own. Use the search_docs tool to \
+retrieve passages from the document store and the calculator tool for arithmetic. When you \
+have an answer, respond exactly:
+ANSWER: <concise answer: a number, as few words as possible, or a comma-separated list; no \
+thousands separators or units unless the task asks for them>
+CONFIDENCE: <number between 0 and 1>
+STATUS: <DRAFT or FINAL>"""
