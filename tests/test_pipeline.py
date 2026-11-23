@@ -96,3 +96,24 @@ def test_cli_dry_run_end_to_end_and_resume():
 
 def test_cli_validate():
     assert main(["validate", "--config-dir", str(CONFIGS), "--tasks", str(SAMPLE_TASKS)]) == 0
+
+
+def test_cache_correctness_reported_per_config():
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        args = ["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks", str(SAMPLE_TASKS),
+                "--corpus", str(SAMPLE_CORPUS), "--seeds", "0", "--out", str(out),
+                "--configs", "baseline", "cache_only",
+                str(CONFIGS / "ablations" / "cache_only_pipeline.yaml")]
+        assert main(args) == 0
+        rows = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines()]
+        assert all("entity_mismatch_hits" in r for r in rows)
+        cfgs = json.loads((out / "summary.json").read_text())["configs"]
+        assert cfgs["baseline"]["cache_correctness"] is None
+        cc = cfgs["cache_only"]["cache_correctness"]
+        assert cc["scope"] == "agent"
+        assert cfgs["cache_only_pipeline"]["cache_correctness"]["scope"] == "pipeline"
+        n_lookups = sum(r["requests"] for r in rows if r["config"] == "cache_only")
+        assert cc["hit_rate"]["n"] == n_lookups
+        assert cc["success_given_hit"]["n"] + cc["success_given_miss"]["n"] == n_lookups
+        assert "## Cache correctness" in (out / "summary.md").read_text()

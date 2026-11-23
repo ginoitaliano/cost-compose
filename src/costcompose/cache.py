@@ -12,11 +12,17 @@ expose directly:
 * ``model_aware``: when False, an entry produced by one model can answer a request routed to
   another. Those cross-model hits are counted separately because they are the interference
   mechanism behind hypothesis H1.
+
+Correctness side of H2: every stored entry keeps the entities (IDs, numbers, dates) extracted
+from the agent's local input. On a hit, the cache compares them with the entities in the
+incoming request; a difference marks an ``entity_mismatch`` hit, the clearest case of a
+semantically close but wrong answer (same question, different order ID).
 """
 
 from __future__ import annotations
 
 import json
+import re
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
@@ -26,12 +32,46 @@ import numpy as np
 
 from .llm import Embedder, LLMResponse
 
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+_DATE = re.compile(
+    rf"\b(?:\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}/\d{{1,2}}/\d{{2,4}}"
+    rf"|{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?"
+    rf"|\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH}(?:,?\s+\d{{4}})?)\b",
+    re.IGNORECASE,
+)
+# Identifiers: letters followed by digits (ORD-48213, INV_77, A12B), or #12345.
+_ID = re.compile(r"\b[A-Za-z]+[-_]?\d[A-Za-z0-9_-]*\b|(?<!\w)#\d+\b")
+# Self-reported confidence in replayed drafts is reasoning-loop scaffolding, not an entity of
+# the request; without this, every refinement step would look like a different query.
+_SCAFFOLD = re.compile(r"CONFIDENCE:\s*[0-9.]+", re.IGNORECASE)
+_NUMBER = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.])\d+(?:\.\d+)?")
+
+
+def extract_entities(text: str) -> frozenset[str]:
+    """Regex entity extractor: dates, then identifiers, then bare numbers.
+
+    Each match is removed before the next pattern runs so a date's digits are not also counted
+    as numbers. Values are normalised (lower-case IDs, numbers without thousands separators and
+    trailing zeros) so formatting differences do not count as different entities.
+    """
+    found: set[str] = set()
+    rest = _SCAFFOLD.sub(" ", text)
+    for kind, pattern in (("date", _DATE), ("id", _ID)):
+        for m in pattern.finditer(rest):
+            found.add(f"{kind}:{' '.join(m.group(0).lower().split())}")
+        rest = pattern.sub(" ", rest)
+    for m in _NUMBER.finditer(rest):
+        value = float(m.group(0).replace(",", ""))
+        found.add(f"num:{value:g}")
+    return frozenset(found)
+
 
 @dataclass
 class CacheHit:
     response: LLMResponse
     similarity: float
     source_model: str
+    entity_mismatch: bool = False  # served entry came from a request with different entities
 
 
 class VectorBackend(Protocol):
@@ -104,6 +144,7 @@ class CacheStats:
     lookups: Counter = field(default_factory=Counter)
     hits: Counter = field(default_factory=Counter)
     cross_model_hits: Counter = field(default_factory=Counter)
+    entity_mismatch_hits: Counter = field(default_factory=Counter)
 
     def hit_rate(self, agent: str | None = None) -> float:
         lk = self.lookups[agent] if agent else sum(self.lookups.values())
@@ -152,11 +193,25 @@ class SemanticCache:
         self.stats.hits[agent] += 1
         if payload["model"] != model:
             self.stats.cross_model_hits[agent] += 1
-        hit = CacheHit(LLMResponse.from_dict(payload["response"]), sim, payload["model"])
+        stored = payload.get("entities")  # absent on entries written before this field existed
+        mismatch = stored is not None and frozenset(stored) != extract_entities(local_input)
+        if mismatch:
+            self.stats.entity_mismatch_hits[agent] += 1
+        hit = CacheHit(LLMResponse.from_dict(payload["response"]), sim, payload["model"],
+                       mismatch)
         return hit, vec, tokens
 
-    def store(self, agent: str, model: str, vector: np.ndarray, response: LLMResponse) -> None:
+    def store(
+        self,
+        agent: str,
+        model: str,
+        vector: np.ndarray,
+        response: LLMResponse,
+        local_input: str | None = None,
+    ) -> None:
         payload = {"model": model, "agent": agent, "response": response.to_dict()}
+        if local_input is not None:
+            payload["entities"] = sorted(extract_entities(local_input))
         self.backend.add(self._namespace(agent, model), vector, payload)
 
     def reset(self) -> None:

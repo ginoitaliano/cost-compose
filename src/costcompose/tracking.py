@@ -28,6 +28,7 @@ class CallRecord:
     cross_model_hit: bool
     embedding_tokens: int
     latency_s: float
+    entity_mismatch: bool = False  # cache hit served from a request with different entities
 
 
 @dataclass
@@ -60,6 +61,10 @@ class TaskTrace:
             "requests": len(self.calls),
             "cache_hits": len(hits),
             "cross_model_hits": sum(c.cross_model_hit for c in hits),
+            "entity_mismatch_hits": sum(c.entity_mismatch for c in hits),
+            "entity_mismatch_hits_by_agent": dict(
+                Counter(c.agent for c in hits if c.entity_mismatch)
+            ),
             "cache_hits_by_agent": dict(by_agent_hits),
             "requests_by_agent": dict(by_agent_lookups),
             "routing": dict(Counter(c.model for c in self.calls)),

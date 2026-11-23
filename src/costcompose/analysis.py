@@ -152,6 +152,45 @@ def _per_seed(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _rate(k: float, n: float) -> dict[str, Any]:
+    """A rate with its denominator, so every reported rate carries its sample size."""
+    return {"rate": float(k / n) if n else None, "n": int(n)}
+
+
+def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pooled over all seeds of one config. Lookup-level and task-level views.
+
+    Lookup level: of the cache lookups that hit (missed), the share whose task succeeded.
+    Task level: success of tasks that had at least one hit vs tasks that had none.
+    """
+    lookups = sum(r["requests"] for r in rows)
+    hits = sum(r["cache_hits"] for r in rows)
+    misses = lookups - hits
+    known = all("entity_mismatch_hits" in r for r in rows)
+    mism = sum(r.get("entity_mismatch_hits", 0) for r in rows)
+    with_hit = [r for r in rows if r["cache_hits"] > 0]
+    without = [r for r in rows if r["cache_hits"] == 0]
+    by_agent: Counter = Counter()
+    for r in rows:
+        by_agent.update(r.get("entity_mismatch_hits_by_agent", {}))
+    return {
+        "scope": next((r.get("cache_scope") for r in rows if r.get("cache_scope")), None),
+        "hit_rate": _rate(hits, lookups),
+        "entity_mismatch_share_of_hits": _rate(mism, hits) if known else None,
+        "entity_mismatch_hits_by_agent": dict(by_agent) if known else None,
+        "success_given_hit": _rate(sum(r["cache_hits"] * r["success"] for r in rows), hits),
+        "success_given_miss": _rate(
+            sum((r["requests"] - r["cache_hits"]) * r["success"] for r in rows), misses
+        ),
+        "success_given_entity_mismatch_hit": (
+            _rate(sum(r.get("entity_mismatch_hits", 0) * r["success"] for r in rows), mism)
+            if known else None
+        ),
+        "task_success_with_any_hit": _rate(sum(r["success"] for r in with_hit), len(with_hit)),
+        "task_success_with_no_hit": _rate(sum(r["success"] for r in without), len(without)),
+    }
+
+
 def _learning_curve(rows: list[dict[str, Any]], bins: int = 4) -> list[dict[str, float]]:
     """Success and cost per task over successive quarters of the task stream (one seed)."""
     rows = sorted(rows, key=lambda r: r.get("position", 0))
@@ -197,6 +236,10 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 for i in range(n_bins)
             ],
             "seeds": sorted(seeds),
+            "cache_correctness": (
+                _cache_correctness([r for rows in seeds.values() for r in rows])
+                if techniques[name].get("caching") else None
+            ),
             "n_tasks": per_seed[0]["n_tasks"],
             "errors": sum(p["errors"] for p in per_seed),
             **{k: _mean_std([p[k] for p in per_seed]) for k in SCALARS},
@@ -217,9 +260,15 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
         if h1 is not None:
             out["H1_sub_additive"] = h1
     if "cache_only" in configs and "cache_only_pipeline" in configs:
+        agent_cc = configs["cache_only"]["cache_correctness"] or {}
+        pipe_cc = configs["cache_only_pipeline"]["cache_correctness"] or {}
         out["H2_pipeline_vs_agent_cache"] = {
             "agent_scope_hit_rate": configs["cache_only"]["cache_hit_rate"]["mean"],
             "pipeline_scope_hit_rate": configs["cache_only_pipeline"]["cache_hit_rate"]["mean"],
+            "agent_scope_entity_mismatch_share": agent_cc.get("entity_mismatch_share_of_hits"),
+            "pipeline_scope_entity_mismatch_share": pipe_cc.get(
+                "entity_mismatch_share_of_hits"
+            ),
         }
     pairs = [("learned_route", "route_only"), ("composed_learned", "composed")]
     learned = {}
@@ -253,6 +302,40 @@ def _fmt(ms: dict[str, float], pct: bool = False, money: bool = False) -> str:
 
 def _pct_ci(ci: list[float]) -> str:
     return f"[{100 * ci[0]:.1f}, {100 * ci[1]:.1f}]"
+
+
+def _r(x: dict[str, Any] | None) -> str:
+    """Format a {rate, n} pair as 'xx.x% (n=N)'."""
+    if not x:
+        return "–"
+    if x["rate"] is None:
+        return f"– (n={x['n']})"
+    return f"{100 * x['rate']:.1f}% (n={x['n']})"
+
+
+def _cache_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
+    rows = [c for c in order if cfgs[c].get("cache_correctness")]
+    if not rows:
+        return []
+    lines = [
+        "", "## Cache correctness", "",
+        "Pooled over seeds. n is cache lookups for the hit rate, hits for the mismatch share and "
+        "success given a hit, misses for success given a miss, and tasks for the task-level "
+        "columns. An entity-mismatch hit served an entry stored for a request with different "
+        "IDs, numbers or dates.", "",
+        "| Config | Scope | Hit rate | Entity-mismatch share of hits | Success given hit "
+        "| Success given miss | Task success, any hit | Task success, no hit |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in rows:
+        cc = cfgs[c]["cache_correctness"]
+        lines.append(
+            f"| {c} | {cc['scope']} | {_r(cc['hit_rate'])} "
+            f"| {_r(cc['entity_mismatch_share_of_hits'])} | {_r(cc['success_given_hit'])} "
+            f"| {_r(cc['success_given_miss'])} | {_r(cc['task_success_with_any_hit'])} "
+            f"| {_r(cc['task_success_with_no_hit'])} |"
+        )
+    return lines
 
 
 def _h1_markdown(h1: dict[str, Any] | None) -> list[str]:
@@ -322,6 +405,7 @@ def to_markdown(summary: dict[str, Any]) -> str:
             for i, q in enumerate(cfgs[c]["learning_curve"], 1):
                 lines.append(f"| {c} | {i} | {_fmt(q['success_rate'], pct=True)} "
                              f"| {_fmt(q['cost_usd'], money=True)} |")
+    lines += _cache_markdown(cfgs, order)
     lines += _h1_markdown(summary["hypotheses"].get("H1_sub_additive"))
     lines += ["", "## Hypothesis checks", "", "```json"]
     lines += [json.dumps(summary["hypotheses"], indent=2), "```", ""]

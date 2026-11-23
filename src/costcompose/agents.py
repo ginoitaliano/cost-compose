@@ -69,7 +69,7 @@ class Runtime:
                 self.trace.calls.append(
                     CallRecord(agent, decision.model, decision.tier, decision.score, 0, 0, emb,
                                emb, True, hit.source_model != decision.model, emb_tokens,
-                               time.perf_counter() - t0)
+                               time.perf_counter() - t0, hit.entity_mismatch)
                 )
                 return hit.response
 
@@ -81,7 +81,7 @@ class Runtime:
             seed=self.seed,
         )
         if self.cache is not None and vec is not None:
-            self.cache.store(agent, decision.model, vec, resp)
+            self.cache.store(agent, decision.model, vec, resp, local_input)
         u = resp.usage
         emb = self._embed_cost(emb_tokens)
         cost = price_usd(self.cfg.prices, decision.model, u.prompt_tokens, u.completion_tokens)
