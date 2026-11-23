@@ -4,6 +4,9 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- `costcompose spotcheck sample | score` and `make spotcheck`: seeded, stratified 10% sample of tasks for human grading (paper §3.4), and agreement with the automated scorer (raw agreement, Cohen's kappa, per config, with n).
+- `make run` now runs an explicit list: Table 1 plus the ablations H1-H3 need. `make run-extended` runs the other ablations into the same output directory. A test checks that every ablation is in exactly one list.
+
 - H1: the independence prediction `1 - (1 - s_cache)(1 - s_route)` is the primary test, with the interaction term (observed minus prediction) and a 95% paired bootstrap CI. The sum-of-savings comparison is kept as a labelled secondary figure.
 - Cache correctness: regex entity extractor (`cache.extract_entities`); per-hit `entity_mismatch` flag; per config and scope, the hit rate, entity-mismatch share of hits and success given hit vs miss, each with n.
 - Composition effect 4: `cache_induced_early_stops`, `cached_drafts` and `cached_draft_replays` per task; new flag `early_stopping.exclude_cached_drafts`; ablation `composed_exclude_cached_drafts`.

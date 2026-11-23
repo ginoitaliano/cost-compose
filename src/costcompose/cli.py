@@ -1,13 +1,15 @@
-"""Command-line interface: ``costcompose run | report | validate``."""
+"""Command-line interface: ``costcompose run | report | validate | spotcheck``."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
 
 from .config import load_config
+from . import spotcheck
 from .experiment import run_experiment, write_report
 from .tasks import load_tasks, strata
 
@@ -50,6 +52,19 @@ def main(argv: list[str] | None = None) -> int:
     val.add_argument("--config-dir", type=Path, default=Path("configs"))
     val.add_argument("--tasks", type=Path, default=None)
 
+    spot = sub.add_parser("spotcheck", help="human spot-checks of the automated scorer")
+    spot_sub = spot.add_subparsers(dest="spot_cmd", required=True)
+    smp = spot_sub.add_parser("sample", help="write a stratified sample of runs to grade")
+    smp.add_argument("out", type=Path, help="run directory containing runs.jsonl")
+    smp.add_argument("--tasks", type=Path, default=None,
+                     help="task JSONL, to include each question in the CSV")
+    smp.add_argument("--fraction", type=float, default=0.1)
+    smp.add_argument("--seed", type=int, default=0)
+    smp.add_argument("--csv", type=Path, default=None, help="default: <out>/spotcheck.csv")
+    smp.add_argument("--force", action="store_true", help="overwrite an existing CSV")
+    scr = spot_sub.add_parser("score", help="agreement of human grades with the scorer")
+    scr.add_argument("csv", type=Path)
+
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -62,6 +77,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.tasks:
             tasks = load_tasks(args.tasks)
             print(f"ok  {len(tasks)} tasks, strata {strata(tasks)}")
+        return 0
+
+    if args.cmd == "spotcheck":
+        if args.spot_cmd == "sample":
+            questions = None
+            if args.tasks:
+                questions = {t.id: t.question for t in load_tasks(args.tasks)}
+            rows = spotcheck.sample(spotcheck.load_records(args.out), questions,
+                                    args.fraction, args.seed)
+            path = spotcheck.write_csv(rows, args.csv or args.out / "spotcheck.csv", args.force)
+            tasks = len({(r["task_id"], r["seed"]) for r in rows})
+            print(f"wrote {path}: {len(rows)} rows ({tasks} task runs x configs). Fill in "
+                  "human_success with 1 or 0, then run: costcompose spotcheck score "
+                  f"{path}")
+            return 0
+        result = spotcheck.score(args.csv)
+        out = args.csv.with_name(args.csv.stem + "_agreement.json")
+        out.write_text(json.dumps(result, indent=2))
+        print(spotcheck.format_score(result))
+        print(f"wrote {out}")
         return 0
 
     if args.cmd == "report":
