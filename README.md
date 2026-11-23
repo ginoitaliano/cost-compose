@@ -47,7 +47,7 @@ Every LLM request from every node goes through one choke point (`Runtime.call_ll
 | `learned_route` | `route_only` | `routing.policy: linucb` | learned vs heuristic routing |
 | `composed_learned` | `composed` | `routing.policy: linucb` | learned routing under composition |
 
-`make run` runs the four Table 1 configs and every file in `configs/ablations/`, so adding an ablation adds it to the paid run.
+`make run` runs what the paper needs: the four Table 1 configs plus `cache_route`, `cache_only_pipeline`, `composed_model_aware` and the two single-agent configs. `make run-extended` runs the other five ablations into the same output directory, and the report covers whatever has been run. Both targets use explicit lists in the Makefile, and a test fails if a file in `configs/ablations/` is in neither list or in both.
 
 ## What it measures
 
@@ -117,11 +117,15 @@ docker run -d -p 6379:6379 redis:7-alpine  # cache backend
 python scripts/prepare_gaia.py --per-stratum 20 --out data/tasks/gaia_subset.jsonl
 cat data/tasks/gaia_subset.jsonl data/tasks/enterprise.jsonl > data/tasks/suite.jsonl
 
-make run      # Table 1 configs + ablations, seeds 0 1 2 -> results/full/
-make report   # rebuild summary.md / summary.json from runs.jsonl
+make run            # Table 1 + the ablations H1-H3 need, seeds 0 1 2 -> results/full/
+make run-extended   # optional: the other ablations, appended to results/full/
+make report         # rebuild summary.md / summary.json from runs.jsonl
+make spotcheck      # 10% human spot-check sample -> results/full/spotcheck.csv
 ```
 
 GAIA tasks come from the validation split only, because it is the only split with public answers. `prepare_gaia.py` excludes tasks the pipeline cannot attempt. Its tools are a calculator and search over the local corpus, so it drops tasks that need web browsing, tasks with an attached file it cannot read (any attachment by default; `--readable-extensions` allows some), and tasks that need multimodal input. The decision uses GAIA's metadata: the `file_name` field and the annotators' tool list, plus URLs or YouTube links in the question. Exclusion counts by reason are printed and written to `<out>.exclusions.json`, which holds counts only, no task content. Tasks with no annotator tool list are kept and counted so they can be reviewed by hand. If fewer than 20 eligible tasks remain in a stratum, the script warns rather than padding.
+
+Human spot-checks (paper §3.4) check the automated scorer. `costcompose spotcheck sample results/full --tasks data/tasks/suite.jsonl` draws a seeded 10% of task IDs per complexity stratum (4 per stratum at 40/40/40) and one seed per sampled task. It writes a CSV row for every config that ran that task and seed, so scorer errors that depend on the config show up. It will not overwrite an existing CSV without `--force`. Fill `human_success` with 1 or 0, then `costcompose spotcheck score results/full/spotcheck.csv` reports agreement and Cohen's kappa against `auto_success`, overall and per config with n, and lists the disagreements. The CSV holds task questions, and for GAIA tasks it must not be published; `results/` is git-ignored.
 
 Runs are resumable: `runs.jsonl` is appended one task at a time, and a rerun skips every (config, seed, task) already recorded. A failed task is logged with its error and scored as a failure rather than stopping the run.
 
@@ -180,7 +184,8 @@ src/costcompose/
   tracking.py     per-call cost and token accounting
   analysis.py     paired tests (McNemar, bootstrap), H1-H3 and effect 4, Markdown report
   experiment.py   resumable configs x seeds x tasks runner
-  cli.py          costcompose run | report | validate
+  spotcheck.py    human spot-check sampling and scorer agreement
+  cli.py          costcompose run | report | validate | spotcheck
 configs/          Table 1 configurations and ablations
 data/             sample corpus and tasks (GAIA is fetched, never committed)
 scripts/          vLLM server, GAIA subset builder and filter
