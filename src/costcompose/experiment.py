@@ -104,7 +104,8 @@ def run_experiment(
                 for position, task in todo:
                     rec = run_task(rt, task, engine=engine, graph=graph)
                     rec.update(config=cfg.name, seed=seed, backend=backend, position=position,
-                               techniques=cfg.techniques)
+                               techniques=cfg.techniques,
+                               cache_scope=cfg.caching.scope if cfg.caching.enabled else None)
                     fh.write(json.dumps(rec) + "\n")
                     fh.flush()
                     if rec["error"]:
