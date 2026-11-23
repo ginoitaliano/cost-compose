@@ -17,6 +17,11 @@ Correctness side of H2: every stored entry keeps the entities (IDs, numbers, dat
 from the agent's local input. On a hit, the cache compares them with the entities in the
 incoming request; a difference marks an ``entity_mismatch`` hit, the clearest case of a
 semantically close but wrong answer (same question, different order ID).
+
+``skip_tool_calls``: when True, a response that contains a tool/function call with arguments
+is never stored and never served. Replaying an action call is riskier than replaying text: its
+arguments were chosen for the request that produced it. Plans, retrieval summaries and final
+text are still cached.
 """
 
 from __future__ import annotations
@@ -64,6 +69,15 @@ def extract_entities(text: str) -> frozenset[str]:
         value = float(m.group(0).replace(",", ""))
         found.add(f"num:{value:g}")
     return frozenset(found)
+
+
+def _has_tool_call_args(tool_calls) -> bool:
+    """True if any tool call carries arguments. Accepts ToolCall objects or their dicts."""
+    for tc in tool_calls or []:
+        args = tc.get("arguments") if isinstance(tc, dict) else tc.arguments
+        if args:
+            return True
+    return False
 
 
 @dataclass
@@ -145,6 +159,7 @@ class CacheStats:
     hits: Counter = field(default_factory=Counter)
     cross_model_hits: Counter = field(default_factory=Counter)
     entity_mismatch_hits: Counter = field(default_factory=Counter)
+    tool_call_entries_refused: Counter = field(default_factory=Counter)  # hits not served
 
     def hit_rate(self, agent: str | None = None) -> float:
         lk = self.lookups[agent] if agent else sum(self.lookups.values())
@@ -160,6 +175,7 @@ class SemanticCache:
         threshold: float = 0.92,
         scope: str = "agent",
         model_aware: bool = False,
+        skip_tool_calls: bool = False,
     ) -> None:
         if scope not in {"agent", "pipeline"}:
             raise ValueError(scope)
@@ -168,6 +184,7 @@ class SemanticCache:
         self.threshold = threshold
         self.scope = scope
         self.model_aware = model_aware
+        self.skip_tool_calls = skip_tool_calls
         self.stats = CacheStats()
 
     def _namespace(self, agent: str, model: str) -> str:
@@ -190,6 +207,9 @@ class SemanticCache:
         if found is None or found[0] < self.threshold:
             return None, vec, tokens
         sim, payload = found
+        if self.skip_tool_calls and _has_tool_call_args(payload["response"].get("tool_calls")):
+            self.stats.tool_call_entries_refused[agent] += 1
+            return None, vec, tokens
         self.stats.hits[agent] += 1
         if payload["model"] != model:
             self.stats.cross_model_hits[agent] += 1
@@ -208,11 +228,15 @@ class SemanticCache:
         vector: np.ndarray,
         response: LLMResponse,
         local_input: str | None = None,
-    ) -> None:
+    ) -> bool:
+        """Store a response. Returns False if it was withheld (``skip_tool_calls``)."""
+        if self.skip_tool_calls and _has_tool_call_args(response.tool_calls):
+            return False
         payload = {"model": model, "agent": agent, "response": response.to_dict()}
         if local_input is not None:
             payload["entities"] = sorted(extract_entities(local_input))
         self.backend.add(self._namespace(agent, model), vector, payload)
+        return True
 
     def reset(self) -> None:
         self.backend.clear()

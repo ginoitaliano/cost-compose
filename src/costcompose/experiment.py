@@ -41,7 +41,8 @@ def make_cache(
         backend = RedisBackend(url, prefix=f"costcompose:{namespace}")
     else:
         backend = InMemoryBackend()
-    cache = SemanticCache(backend, embedder, c.threshold, c.scope, c.model_aware)
+    cache = SemanticCache(backend, embedder, c.threshold, c.scope, c.model_aware,
+                          skip_tool_calls=c.skip_tool_calls)
     cache.reset()  # every (config, seed) run starts cold
     return cache
 

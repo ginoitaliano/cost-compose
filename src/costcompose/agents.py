@@ -81,7 +81,8 @@ class Runtime:
             seed=self.seed,
         )
         if self.cache is not None and vec is not None:
-            self.cache.store(agent, decision.model, vec, resp, local_input)
+            if not self.cache.store(agent, decision.model, vec, resp, local_input):
+                self.trace.tool_call_responses_not_cached += 1
         u = resp.usage
         emb = self._embed_cost(emb_tokens)
         cost = price_usd(self.cfg.prices, decision.model, u.prompt_tokens, u.completion_tokens)

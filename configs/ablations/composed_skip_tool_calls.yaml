@@ -1,0 +1,6 @@
+# Composed, but LLM outputs that contain a tool/function call with arguments are never written
+# to or served from the cache. Plans, retrieval summaries and final text are still cached.
+# Compare with composed to see how much of the caching saving comes from replayed action calls.
+extends: ../composed.yaml
+name: composed_skip_tool_calls
+caching: {skip_tool_calls: true}

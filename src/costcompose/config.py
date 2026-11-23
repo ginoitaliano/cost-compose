@@ -31,6 +31,7 @@ class CachingConfig:
     threshold: float = 0.92
     scope: str = "agent"  # "agent" | "pipeline"
     model_aware: bool = False  # True: a hit requires the same model that produced the entry
+    skip_tool_calls: bool = False  # True: never store or serve responses with tool-call args
     backend: str = "memory"  # "memory" | "redis"
     redis_url: str = "redis://localhost:6379/0"
 

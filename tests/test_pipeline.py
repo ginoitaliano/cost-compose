@@ -117,3 +117,25 @@ def test_cache_correctness_reported_per_config():
         assert cc["hit_rate"]["n"] == n_lookups
         assert cc["success_given_hit"]["n"] + cc["success_given_miss"]["n"] == n_lookups
         assert "## Cache correctness" in (out / "summary.md").read_text()
+
+
+def test_skip_tool_calls_in_pipeline():
+    task = Task("t1", "Charter teams get 192 GPU-hours a week. What is 192 * 3.2?", "614.4", "high")
+    assert cfg("composed").caching.skip_tool_calls is False
+    rt = _runtime("composed_skip_tool_calls")
+    first = run_task(rt, task, engine="native")
+    second = run_task(rt, task, engine="native")
+    assert first["tool_invocations"] >= 1 and first["tool_call_responses_not_cached"] >= 1
+    # The repeat can skip the tool entirely when a stored text draft is close enough; what the
+    # guard guarantees is that no response carrying tool-call arguments is stored or served.
+    assert second["cache_hits"] > 0  # plans, retrieval and text are still cached
+    assert sum(rt.cache.stats.tool_call_entries_refused.values()) == 0
+    stored = [p for ps in rt.cache.backend._payloads.values() for p in ps]
+    assert stored and not any(
+        tc["arguments"] for p in stored for tc in p["response"]["tool_calls"]
+    )
+
+    loose = _runtime("composed")
+    run_task(loose, task, engine="native")
+    stored = [p for ps in loose.cache.backend._payloads.values() for p in ps]
+    assert any(tc["arguments"] for p in stored for tc in p["response"]["tool_calls"])
