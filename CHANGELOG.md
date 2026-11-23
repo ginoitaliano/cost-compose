@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
+
+- H1: the independence prediction `1 - (1 - s_cache)(1 - s_route)` is the primary test, with the interaction term (observed minus prediction) and a 95% paired bootstrap CI. The sum-of-savings comparison is kept as a labelled secondary figure.
+- Cache correctness: regex entity extractor (`cache.extract_entities`); per-hit `entity_mismatch` flag; per config and scope, the hit rate, entity-mismatch share of hits and success given hit vs miss, each with n.
+- Composition effect 4: `cache_induced_early_stops`, `cached_drafts` and `cached_draft_replays` per task; new flag `early_stopping.exclude_cached_drafts`; ablation `composed_exclude_cached_drafts`.
+- `caching.skip_tool_calls`: never store or serve responses with tool-call arguments; ablation `composed_skip_tool_calls`; per-task `tool_call_responses_not_cached`.
+- `caching.version_key`: instruction version in cache namespaces for both scopes (`prompts`, `file:<path>` or a literal).
+- Statistics: paired comparisons over tasks lead the report. They use an exact McNemar test on (task, seed) pairs, and paired bootstrap CIs (10k resamples, seed 0) for success, cost and latency differences. H3 per-stratum drops have stratified bootstrap CIs and a high-minus-low difference-of-differences. Every rate prints its n. Seed-level mean ± std moves to per-config descriptives.
+- `mode: single_agent`: one reasoning agent with retrieval and tools as functions, on both engines. New ablations `single_agent_baseline` and `single_agent_route`. H3 reports multi-agent vs single-agent drops and their difference.
+- `scripts/prepare_gaia.py`: validation split only. Excludes tasks needing web browsing, unreadable attachments or multimodal input, from GAIA metadata, and logs counts by reason to `<out>.exclusions.json`.
+- Docs: repository URLs now point at `ginoitaliano/cost-compose`; added a package/CLI naming note and a complete `.env.example`. The cache is described as GPTCache-style and early stopping as a loop-level rule inspired by CALM. The paper map lists where the paper text and the code differ. `PR_TRIAGE.md` covers the open Dependabot PRs.
+- Report and record changes: `summary.json` gains `comparisons`; `H1_sub_additive` and `H3_routing_success_drop` change shape (see README); run records gain the fields listed in the README.
+
 ## 0.2.0
 
 - Learned routing: `routing.policy: linucb`, a disjoint LinUCB contextual bandit over the four complexity features, trained online on task success minus normalised cost. Cache hits are excluded from updates.
