@@ -70,3 +70,17 @@ def test_mode_defaults_and_validation():
         assert "mode" in str(e)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_every_ablation_is_in_exactly_one_make_target():
+    """make run / make run-extended use explicit lists; a new ablation must be added to one."""
+    import re
+
+    text = (CONFIGS.parent / "Makefile").read_text().replace("\\\n", " ")
+    lists = {}
+    for name in ("CORE_CONFIGS", "EXTENDED_CONFIGS"):
+        m = re.search(rf"^{name}\s*=\s*(.+)$", text, re.MULTILINE)
+        lists[name] = set(re.findall(r"configs/ablations/(\w+)\.yaml", m.group(1)))
+    on_disk = {p.stem for p in (CONFIGS / "ablations").glob("*.yaml")}
+    assert lists["CORE_CONFIGS"] | lists["EXTENDED_CONFIGS"] == on_disk
+    assert not lists["CORE_CONFIGS"] & lists["EXTENDED_CONFIGS"]
