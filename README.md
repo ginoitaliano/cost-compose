@@ -38,11 +38,11 @@ Every LLM request from every node goes through one choke point (`Runtime.call_ll
 
 | Hypothesis | Mechanism instrumented | Where to look |
 | --- | --- | --- |
-| H1: caching + routing saves less than the sum of each alone | Cross-model cache hits: an answer cached from one model served to a request routed to another | `hypotheses.H1_sub_additive`, `cross_model_hit_share` |
+| H1: caching + routing saves less than independent composition predicts | Cross-model cache hits: an answer cached from one model served to a request routed to another | `hypotheses.H1_sub_additive.primary_independence_test` (interaction term and 95% CI), `cross_model_hit_share` |
 | H2: pipeline-level caching hits less than agent-level | Pipeline-scope keys include upstream agent outputs, so upstream drift changes the key | `hypotheses.H2_pipeline_vs_agent_cache`, `cache_hit_rate_by_agent` |
 | H3: routing hurts high-complexity tasks more in multi-agent settings | Success rate per complexity stratum, routed vs baseline | `hypotheses.H3_routing_success_drop`, `success_by_complexity` |
 
-H1 is reported against two baselines: the sum of individual savings (the paper's framing) and the independent-composition prediction `1 − (1 − s_cache)(1 − s_route)`. Savings that compose independently already fall short of the sum, so the second is the stricter test.
+Why H1 is tested against independence, not the sum. Let caching alone save a fraction a of baseline cost and routing alone save b. If the two act independently (caching removes a share of calls, routing makes the remaining calls cheaper), the composed saving is 1 − (1 − a)(1 − b) = a + b − ab. For any two positive savings that is below a + b, so composition is always sub-additive against the sum of savings, and finding it says nothing about interference. The primary H1 test is therefore against the independence prediction `1 − (1 − s_cache)(1 − s_route)`. The report gives the interaction term, observed composed saving minus the independence prediction, with a 95% paired bootstrap CI over tasks: a CI below zero means the techniques interfere, above zero means they reinforce each other, and a CI containing zero is consistent with independence. The comparison against the sum of savings, which is how the paper states H1, is kept as a secondary figure and labelled as such.
 
 Per task the runner records cost (at each model's price and at GPT-4o-equivalent price), wall-clock latency, success, LLM calls vs cache hits by agent, routing decisions, reasoning iterations, early stops and tool calls. Per configuration it reports mean ± std across seeds, P50/P95 latency and success by stratum.
 
