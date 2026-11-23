@@ -163,6 +163,7 @@ def reason_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
         {"role": "user", "content": user},
     ]
     drafts: list[str] = []
+    cached: list[bool] = []  # per draft: served from the cache rather than generated
     transcript: list[str] = []
     tools_used = 0
     for _ in range(rt.cfg.agents.max_iterations):
@@ -189,12 +190,24 @@ def reason_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
             rt.trace.tool_invocations += len(resp.tool_calls)
             continue
 
+        from_cache = bool(rt.trace.calls) and rt.trace.calls[-1].cache_hit
+        if from_cache:
+            rt.trace.cached_drafts += 1
+            answer = extract_answer(resp.content)
+            if any(extract_answer(d) == answer for d in drafts):
+                rt.trace.cached_draft_replays += 1
         drafts.append(resp.content)
+        cached.append(from_cache)
         transcript.append(resp.content)
         rt.trace.reasoning_iterations += 1
-        stop, _conf = rt.stopper.should_stop(drafts)
+        stop_all, _conf = rt.stopper.should_stop(drafts)
+        fresh = [d for d, c in zip(drafts, cached, strict=True) if not c]
+        stop_fresh, _ = rt.stopper.should_stop(fresh)
+        stop = stop_fresh if rt.cfg.early_stopping.exclude_cached_drafts else stop_all
         if stop:
             rt.trace.early_stops += 1
+            if not stop_fresh:  # the cached drafts are what made the loop look converged
+                rt.trace.cache_induced_early_stops += 1
             break
         if re.search(r"STATUS:\s*FINAL", resp.content, re.IGNORECASE):
             break

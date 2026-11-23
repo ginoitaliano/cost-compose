@@ -73,6 +73,9 @@ class EarlyStoppingConfig:
     enabled: bool = False
     threshold: float = 0.88
     self_report_weight: float = 0.5  # rest goes to consistency between consecutive drafts
+    # True: drafts served from the semantic cache are left out of the stop rule, so a replayed
+    # draft cannot make the loop look converged. False (default) reproduces the paper setup.
+    exclude_cached_drafts: bool = False
 
 
 @dataclass
