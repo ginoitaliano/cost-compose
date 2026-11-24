@@ -171,6 +171,8 @@ Tasks are JSONL:
 
 Each task gets two scores. Strict success (`success_strict`) is GAIA-style quasi-exact match: numbers compared numerically after removing `$`, `%` and thousands separators, strings normalised, lists element-wise; anything after a number fails it. Primary success (`success`) is the same, except that a number may be followed by unit words the question itself names: `95 USD` counts for a question ending "in USD", while `1 day` for a question asking "in hours", a different currency, scale words (`thousand`) and hedges (`approx.`) do not. The primary score keeps success from depending on whether a model obeys an instruction to drop units, which differs by model and would bias routing comparisons; the first real-model smoke test showed GPT-4o adding units to 8 of 9 correct answers. The rule was fixed before any study data was collected. The report puts both side by side and repeats the paired success tests under each, so any conclusion that depends on formatting is visible.
 
+An optional judge audits the scorer without changing it. `costcompose judge results/full --tasks data/tasks/suite.jsonl --model <id> --api-base <url>` asks an independent model whether each answer means the same as the reference, for the runs where primary and strict disagree (add `--include-spotcheck results/full/spotcheck.csv` to judge the human-graded sample too). It reports agreement and Cohen's kappa with each score, overall and per config, in `judge_agreement.json`. The judge must not be on the routing ladder; the command refuses GPT-4o, Claude and Llama-3.1, since a model grading its own family's answers tends to favour them. A self-served open model from another family fits, served on its own port with vLLM after the study run (stop the Llama server first or give each a share of the GPU with `--gpu-memory-utilization`). Nothing it does changes `runs.jsonl` or any reported success rate.
+
 Documents for retrieval go in `--corpus` as `.md` or `.txt`.
 
 ## Layout
@@ -187,7 +189,8 @@ src/costcompose/
   analysis.py     paired tests (McNemar, bootstrap), H1-H3 and effect 4, Markdown report
   experiment.py   resumable configs x seeds x tasks runner
   spotcheck.py    human spot-check sampling and scorer agreement
-  cli.py          costcompose run | report | validate | spotcheck
+  judge.py        optional off-ladder LLM-judge audit of the scorer
+  cli.py          costcompose run | report | validate | spotcheck | judge
 configs/          Table 1 configurations and ablations
 data/             sample corpus and tasks (GAIA is fetched, never committed)
 scripts/          vLLM server, GAIA subset builder and filter
