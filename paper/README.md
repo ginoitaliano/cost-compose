@@ -29,6 +29,8 @@
 | Tool-call caching guard | `caching.skip_tool_calls`, `configs/ablations/composed_skip_tool_calls.yaml` |
 | Instruction versioning in cache keys | `caching.version_key` |
 | Paired statistics (McNemar, paired bootstrap) | `analysis.compare` |
+| Primary (unit-tolerant) and strict scores, both reported | `evaluation.py`, "Scoring: primary vs strict" in the report |
+| Optional judge audit of the scorer by an off-ladder model | `judge.py`, `costcompose judge` |
 
 ## Where the paper text and the code differ
 

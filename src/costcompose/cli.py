@@ -1,4 +1,4 @@
-"""Command-line interface: ``costcompose run | report | validate | spotcheck``."""
+"""Command-line interface: ``costcompose run | report | validate | spotcheck | judge``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from .config import load_config
-from . import spotcheck
+from . import judge, spotcheck
 from .experiment import run_experiment, write_report
 from .tasks import load_tasks, strata
 
@@ -65,6 +65,19 @@ def main(argv: list[str] | None = None) -> int:
     scr = spot_sub.add_parser("score", help="agreement of human grades with the scorer")
     scr.add_argument("csv", type=Path)
 
+    jdg = sub.add_parser("judge", help="audit the scorer with an independent LLM judge")
+    jdg.add_argument("out", type=Path, help="run directory containing runs.jsonl")
+    jdg.add_argument("--tasks", type=Path, required=True, help="task JSONL, for the questions")
+    jdg.add_argument("--model", default=None,
+                     help="LiteLLM id of a judge model NOT on the routing ladder")
+    jdg.add_argument("--api-base", default=None,
+                     help="endpoint for a self-served judge, e.g. http://localhost:8001/v1")
+    jdg.add_argument("--include-spotcheck", type=Path, default=None,
+                     help="also judge the runs listed in this spot-check CSV")
+    jdg.add_argument("--config", type=Path, default=Path("configs/base.yaml"),
+                     help="config whose routing ladder the judge must not be on")
+    jdg.add_argument("--dry-run", action="store_true", help="offline fake judge (tests)")
+
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -97,6 +110,28 @@ def main(argv: list[str] | None = None) -> int:
         out.write_text(json.dumps(result, indent=2))
         print(spotcheck.format_score(result))
         print(f"wrote {out}")
+        return 0
+
+    if args.cmd == "judge":
+        model = args.model or ("fake-judge" if args.dry_run else None)
+        if not model:
+            ap.error("judge needs --model (or --dry-run)")
+        judge.check_off_ladder(model, load_config(args.config).routing)
+        rows = judge.select(spotcheck.load_records(args.out), args.include_spotcheck)
+        if not rows:
+            print("nothing to judge: primary and strict scores agree on every run "
+                  "(add --include-spotcheck to judge the spot-check sample)")
+            return 0
+        if args.dry_run:
+            from .llm import FakeLLMClient
+            client = FakeLLMClient()
+        else:
+            from .llm import LiteLLMClient
+            client = LiteLLMClient(api_base=args.api_base)
+        questions = {t.id: t.question for t in load_tasks(args.tasks)}
+        result = judge.write(judge.run(rows, questions, client, model), args.out)
+        print(judge.format_result(result))
+        print(f"wrote {args.out / 'judge.jsonl'} and {args.out / 'judge_agreement.json'}")
         return 0
 
     if args.cmd == "report":

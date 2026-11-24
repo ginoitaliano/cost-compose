@@ -92,12 +92,15 @@ def _normalise(mat: np.ndarray) -> np.ndarray:
 class LiteLLMClient:
     """Thin wrapper over ``litellm.completion`` with retries and tool-call parsing."""
 
-    def __init__(self, max_retries: int = 3, timeout_s: float = 120.0) -> None:
+    def __init__(
+        self, max_retries: int = 3, timeout_s: float = 120.0, api_base: str | None = None
+    ) -> None:
         import litellm  # imported lazily so the package works without the extra
 
         self._litellm = litellm
         self.max_retries = max_retries
         self.timeout_s = timeout_s
+        self.api_base = api_base  # None = provider default / environment
 
     def complete(self, model, messages, tools=None, temperature=0.0, seed=None) -> LLMResponse:
         kwargs: dict[str, Any] = {
@@ -112,6 +115,8 @@ class LiteLLMClient:
             kwargs["tools"] = tools
         if seed is not None:
             kwargs["seed"] = seed
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
         resp = self._litellm.completion(**kwargs)
         msg = resp.choices[0].message
         calls = []
@@ -209,6 +214,14 @@ class FakeLLMClient:
                 conf = min(0.99, 0.6 + 0.15 * iteration + (digest % 10) / 100)
                 status = "FINAL" if iteration >= 3 else "DRAFT"
                 content = f"ANSWER: draft for {user[:40]}\nCONFIDENCE: {conf:.2f}\nSTATUS: {status}"
+        elif role == "judge":
+            gold = re.search(r"Reference answer: (.*)", user)
+            pred = re.search(r"Model answer: (.*)", user)
+            num = re.compile(r"[-+]?\d+(?:\.\d+)?")
+            g = num.search(gold.group(1).replace(",", "")) if gold else None
+            p = num.search(pred.group(1).replace(",", "")) if pred else None
+            same = bool(g and p and float(g.group()) == float(p.group()))
+            content = f"VERDICT: {'CORRECT' if same else 'INCORRECT'}"
         elif role == "aggregator":
             content = "FINAL ANSWER: unknown"
         else:
