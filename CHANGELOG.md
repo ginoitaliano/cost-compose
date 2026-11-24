@@ -4,6 +4,7 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- Scoring: every record has `success` (primary: quasi-exact match that also accepts trailing unit words the question names) and `success_strict` (GAIA-style quasi-exact match). The report adds a primary-vs-strict section with paired tests under both. The aggregator and single-agent prompts now ask for the bare number even when the question names a unit. The spot-check CSV carries both automated verdicts.
 - Bottom routing rung is now Llama-3.1-8B-Instruct (`meta-llama/Llama-3.1-8B-Instruct`), replacing Llama-3-8B-Instruct; same size, same placeholder price. `serve_llama.sh` binds to 127.0.0.1 and one GPU by default.
 - `costcompose spotcheck sample | score` and `make spotcheck`: seeded, stratified 10% sample of tasks for human grading (paper §3.4), and agreement with the automated scorer (raw agreement, Cohen's kappa, per config, with n).
 - `make run` now runs an explicit list: Table 1 plus the ablations H1-H3 need. `make run-extended` runs the other ablations into the same output directory. A test checks that every ablation is in exactly one list.

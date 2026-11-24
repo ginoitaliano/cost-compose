@@ -13,6 +13,7 @@
 | §3.2 early stopping, threshold 0.88 | `early_stop.py`. A loop-level stop rule inspired by CALM (Schuster et al. 2022), not CALM: CALM is token-level early exit, while this rule decides whether to run another reasoning-loop iteration. |
 | §3.3 task suite, 40 per stratum | `tasks.py`, `scripts/prepare_gaia.py` (GAIA validation split; excludes web-browsing, attachment and multimodal tasks, with counts by reason) |
 | §3.4 metrics (cost, P50/P95 latency, success, cache hit rate, routing distribution) | `tracking.py`, `analysis.py` |
+| §3.4 task success (automated evaluation against ground truth) | `evaluation.score_lenient` (primary) and `evaluation.score` (strict, GAIA-style); both recorded per task |
 | §3.4 human spot-checks on 10% of tasks | `spotcheck.py`, `costcompose spotcheck sample` / `score`, `make spotcheck` |
 | §3.5 three seeds, means and standard deviations | `experiment.py`; `analysis.py` reports them as per-config descriptives, with paired tests over tasks as the headline comparison |
 | §4 H1 | `analysis._h1_test`: independence baseline `1 - (1 - s_cache)(1 - s_route)` as the primary test, interaction term with a 95% CI; the paper's sum-of-savings framing as a secondary figure |

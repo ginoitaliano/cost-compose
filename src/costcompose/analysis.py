@@ -204,6 +204,18 @@ def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _scoring(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Primary (lenient) vs strict success, pooled over seeds. None for older records."""
+    if not rows or any("success_strict" not in r for r in rows):
+        return None
+    n = len(rows)
+    return {
+        "primary": _rate(sum(bool(r["success"]) for r in rows), n),
+        "strict": _rate(sum(bool(r["success_strict"]) for r in rows), n),
+        "scored_differently": sum(bool(r["success"]) != bool(r["success_strict"]) for r in rows),
+    }
+
+
 def _cache_early_stop(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Fourth composition effect: early stops triggered by drafts replayed from the cache."""
     stops = sum(r["early_stops"] for r in rows)
@@ -291,6 +303,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 for i in range(n_bins)
             ],
             "seeds": sorted(seeds),
+            "scoring": _scoring([r for rows in seeds.values() for r in rows]),
             "cache_early_stop": (
                 _cache_early_stop([r for rows in seeds.values() for r in rows])
                 if techniques[name].get("caching") and techniques[name].get("early_stopping")
@@ -371,6 +384,17 @@ def compare(records: list[dict[str, Any]], ref: str, cfg: str) -> dict[str, Any]
     keys = sorted(set(a) & set(b))
     if not keys:
         return None
+    strict = None
+    rows_ab = [r for r in records if r["config"] in (ref, cfg)]
+    if rows_ab and all("success_strict" in r for r in rows_ab):
+        sa = {(r["task_id"], r["seed"]): bool(r["success_strict"])
+              for r in rows_ab if r["config"] == ref}
+        sb = {(r["task_id"], r["seed"]): bool(r["success_strict"])
+              for r in rows_ab if r["config"] == cfg}
+        strict = {
+            **_paired_delta(records, ref, cfg, "success_strict"),
+            "mcnemar": _mcnemar_exact([sa[k] for k in keys], [sb[k] for k in keys]),
+        }
     return {
         "reference": ref,
         "config": cfg,
@@ -378,6 +402,7 @@ def compare(records: list[dict[str, Any]], ref: str, cfg: str) -> dict[str, Any]
             **_paired_delta(records, ref, cfg, "success"),
             "mcnemar": _mcnemar_exact([a[k] for k in keys], [b[k] for k in keys]),
         },
+        "success_strict": strict,
         "cost_usd": _paired_delta(records, ref, cfg, "cost_usd", relative=True),
         "latency_s": _paired_delta(records, ref, cfg, "latency_s"),
     }
@@ -654,6 +679,44 @@ def _comparisons_markdown(comparisons: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _scoring_markdown(cfgs: dict[str, Any], order: list[str],
+                      comparisons: list[dict[str, Any]]) -> list[str]:
+    rows = [c for c in order if cfgs[c].get("scoring")]
+    if not rows:
+        return []
+    lines = [
+        "", "## Scoring: primary vs strict", "",
+        "Primary success accepts a numeric answer followed by unit words the question names "
+        "(\"95 USD\" for a question \"in USD\"). Strict success is GAIA-style quasi-exact match, "
+        "where any trailing unit fails. Pooled over seeds; n is task runs.", "",
+        "| Config | Primary success | Strict success | Runs scored differently |",
+        "| --- | --- | --- | --- |",
+    ]
+    for c in rows:
+        s = cfgs[c]["scoring"]
+        lines.append(f"| {c} | {_r(s['primary'])} | {_r(s['strict'])} "
+                     f"| {s['scored_differently']} |")
+    strict = [c for c in comparisons if c.get("success_strict")]
+    if strict:
+        lines += [
+            "", "Paired success comparisons under each rule. A conclusion that holds under one "
+            "rule but not the other depends on answer formatting.", "",
+            "| Config | Reference | Primary diff (95% CI) | McNemar p | Strict diff (95% CI) "
+            "| McNemar p |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for c in strict:
+            p_, s_ = c["success"], c["success_strict"]
+            lines.append(
+                f"| {c['config']} | {c['reference']} "
+                f"| {100 * p_['delta']:+.1f} pp {_pct_ci(p_['delta_ci95'])} "
+                f"| {_p(p_['mcnemar']['p_value'])} "
+                f"| {100 * s_['delta']:+.1f} pp {_pct_ci(s_['delta_ci95'])} "
+                f"| {_p(s_['mcnemar']['p_value'])} |"
+            )
+    return lines
+
+
 def _h3_markdown(h3: dict[str, Any] | None) -> list[str]:
     if not h3:
         return []
@@ -694,6 +757,7 @@ def to_markdown(summary: dict[str, Any]) -> str:
     hyp = summary["hypotheses"]
     lines = ["# Results", ""]
     lines += _comparisons_markdown(summary.get("comparisons", []))
+    lines += _scoring_markdown(cfgs, order, summary.get("comparisons", []))
     lines += _h1_markdown(hyp.get("H1_sub_additive"))
     lines += _h3_markdown(hyp.get("H3_routing_success_drop"))
     lines += _e4_markdown(hyp.get("E4_cache_induced_early_stops"))

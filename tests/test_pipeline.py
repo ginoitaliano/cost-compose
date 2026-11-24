@@ -171,3 +171,18 @@ def test_single_agent_h3_comparison_in_report():
         h3 = json.loads((out / "summary.json").read_text())["hypotheses"]["H3_routing_success_drop"]
         assert set(h3) == {"multi_agent", "single_agent", "multi_minus_single"}
         assert h3["single_agent"]["by_stratum"]["high"]["n_tasks"] == 3
+
+
+def test_records_carry_both_scores_and_report_compares_them():
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        args = ["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks", str(SAMPLE_TASKS),
+                "--corpus", str(SAMPLE_CORPUS), "--seeds", "0", "--out", str(out),
+                "--configs", "baseline", "route_only"]
+        assert main(args) == 0
+        rows = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines()]
+        assert all("success_strict" in r for r in rows)
+        summary = json.loads((out / "summary.json").read_text())
+        assert summary["configs"]["baseline"]["scoring"]["primary"]["n"] == 9
+        assert summary["comparisons"][0]["success_strict"]["mcnemar"]["n_pairs"] == 9
+        assert "## Scoring: primary vs strict" in (out / "summary.md").read_text()

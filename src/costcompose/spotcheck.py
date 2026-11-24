@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 COLUMNS = ("config", "seed", "task_id", "complexity", "question", "gold", "prediction",
-           "auto_success", "human_success", "notes")
+           "auto_success", "auto_success_strict", "human_success", "notes")
 _TRUE = {"1", "y", "yes", "true", "t", "correct"}
 _FALSE = {"0", "n", "no", "false", "f", "incorrect"}
 
@@ -59,6 +59,9 @@ def sample(
                 "config": r["config"], "seed": s, "task_id": t, "complexity": cx_of[t],
                 "question": (questions or {}).get(t, ""), "gold": r["gold"],
                 "prediction": r["prediction"], "auto_success": int(bool(r["success"])),
+                "auto_success_strict": (
+                    int(bool(r["success_strict"])) if "success_strict" in r else ""
+                ),
                 "human_success": "", "notes": "",
             })
     return rows
@@ -101,6 +104,7 @@ def score(path: str | Path) -> dict[str, Any]:
     with Path(path).open(newline="") as fh:
         rows = list(csv.DictReader(fh))
     graded: list[tuple[dict, bool, bool]] = []
+    strict_pairs: list[tuple[bool, bool]] = []
     ungraded = 0
     for r in rows:
         human = _verdict(r.get("human_success", ""))
@@ -108,6 +112,8 @@ def score(path: str | Path) -> dict[str, Any]:
             ungraded += 1
             continue
         graded.append((r, r["auto_success"].strip() == "1", human))
+        if (r.get("auto_success_strict") or "").strip() in {"0", "1"}:
+            strict_pairs.append((r["auto_success_strict"].strip() == "1", human))
     by_config: dict[str, list[tuple[bool, bool]]] = defaultdict(list)
     for r, a, h in graded:
         by_config[r["config"]].append((a, h))
@@ -115,6 +121,7 @@ def score(path: str | Path) -> dict[str, Any]:
         "rows": len(rows),
         "ungraded": ungraded,
         "overall": _agreement([(a, h) for _, a, h in graded]),
+        "overall_strict": _agreement(strict_pairs),
         "by_config": {c: _agreement(p) for c, p in sorted(by_config.items())},
         "disagreements": [
             {"config": r["config"], "seed": int(r["seed"]), "task_id": r["task_id"],
@@ -137,7 +144,8 @@ def format_score(result: dict[str, Any]) -> str:
         return f"agreement {100 * a['agreement']:.1f}% (n={a['n']}), Cohen's kappa {kappa}"
 
     lines = [f"graded {result['rows'] - result['ungraded']} of {result['rows']} rows",
-             f"overall: {fmt(result['overall'])}"]
+             f"overall: {fmt(result['overall'])}",
+             f"strict scorer: {fmt(result.get('overall_strict', {'n': 0}))}"]
     lines += [f"  {c}: {fmt(a)}" for c, a in result["by_config"].items()]
     lines.append(f"disagreements: {len(result['disagreements'])}")
     lines += [f"  {d['config']} seed {d['seed']} {d['task_id']}: auto {d['auto_success']}, "
