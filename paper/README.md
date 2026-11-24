@@ -33,6 +33,8 @@
 
 These are not changed in the code. They are listed so the paper text can be brought in line.
 
+- The proposal's ladder starts at Llama-3-8B. The code uses Llama-3.1-8B-Instruct, the current 8B instruct model in the Llama 3 line; the other three rungs are unchanged. The paper should name the model actually run.
+
 - §3.2 says caching is implemented "using GPTCache". The code reimplements GPTCache's design (see above).
 - §3.2 cites CALM for early stopping "in the spirit of confidence-based adaptive computation". The code's rule is loop-level, not token-level.
 - §3.4 says metrics are collected "via LangSmith tracing". The code meters tokens, cost and latency itself in `tracking.py` for both engines. LangSmith traces only the LangGraph engine and is not the source of any reported number.
