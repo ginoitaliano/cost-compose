@@ -104,14 +104,14 @@ The repository is named `cost-compose`. The Python distribution, the import path
 
 ## Full run
 
-The experiments run on a Lightning AI Studio GPU, which also serves Llama-3-8B locally.
+The experiments run on a Lightning AI Studio GPU, which also serves Llama-3.1-8B locally.
 
 ```bash
 pip install -e ".[all]"
 cp .env.example .env                       # OpenAI, Anthropic, LangSmith, Hugging Face keys
 set -a; . ./.env; set +a                   # the CLI does not read .env itself; export it
 docker run -d -p 6379:6379 redis:7-alpine  # cache backend
-./scripts/serve_llama.sh &                 # vLLM, OpenAI-compatible, port 8000
+./scripts/serve_llama.sh &                 # vLLM on 127.0.0.1:8000, one GPU; needs HF_TOKEN with Llama 3.1 access
 
 # Task suite: 60 GAIA tasks + your enterprise RAG tasks, 40 per stratum in total
 python scripts/prepare_gaia.py --per-stratum 20 --out data/tasks/gaia_subset.jsonl
@@ -146,8 +146,8 @@ All settings live in `configs/base.yaml`; each configuration `extends:` it and o
 | Cache similarity threshold | 0.92 cosine, `text-embedding-3-small` |
 | Cache scope | `agent` (per-agent namespace, local input) or `pipeline` (shared, input + upstream context) |
 | Routing features | query length, tool-call count, context size, dependency depth; equal weights |
-| Routing ladder | Llama-3-8B < 0.25 ≤ Haiku 4.5 < 0.5 ≤ GPT-4o < 0.75 ≤ Sonnet 4.5 |
-| Low tier | score < 0.5 (Llama-3-8B, Haiku 4.5) |
+| Routing ladder | Llama-3.1-8B < 0.25 ≤ Haiku 4.5 < 0.5 ≤ GPT-4o < 0.75 ≤ Sonnet 4.5 |
+| Low tier | score < 0.5 (Llama-3.1-8B, Haiku 4.5) |
 | Early-stopping threshold | 0.88 on 0.5 × self-reported confidence + 0.5 × draft consistency (stop when it exceeds the threshold) |
 | Router policy | `heuristic` (paper) or `linucb`; bandit α = 1.0, ridge = 1.0, λ = 0.5 |
 | Seeds | 0, 1, 2 (seed also shuffles task order, which sets what the cache has seen) |
