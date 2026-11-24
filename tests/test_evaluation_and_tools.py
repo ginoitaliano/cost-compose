@@ -38,3 +38,63 @@ def test_tool_errors_are_returned_not_raised():
     assert reg.call("calculator", {"expression": "4*250"}) == "1000"
     assert reg.call("calculator", {"expression": "nope"}).startswith("error")
     assert reg.call("missing", {}).startswith("error")
+
+
+# -- primary (lenient) vs strict scoring --------------------------------------------------
+
+import json  # noqa: E402
+
+from helpers import SAMPLE_TASKS  # noqa: E402
+
+from costcompose.evaluation import score_lenient  # noqa: E402
+
+_TASKS = {json.loads(x)["id"]: json.loads(x) for x in SAMPLE_TASKS.read_text().splitlines()}
+
+# The 18 predictions from the first real-model smoke test (baseline = GPT-4o, route_only =
+# mostly Llama-3.1-8B and Claude Haiku 4.5), with the verdict each rule must give.
+SMOKE = [
+    # task, prediction, strict, primary
+    ("s-high-2", "1475 USD", False, True),
+    ("s-med-3", "4000 USD", False, True),
+    ("s-low-2", "1 hour", False, True),
+    ("s-med-1", "192", True, True),
+    ("s-med-2", "750 USD", False, True),
+    ("s-low-3", "64 GPU-hours per week", False, True),
+    ("s-low-1", "95 USD", False, True),
+    ("s-high-3", "10000 USD", False, True),
+    ("s-high-1", "2457.6 USD", False, True),
+    ("s-high-3", "4000", False, False),  # a real error stays an error
+    ("s-high-1", "2457.60", True, True),
+]
+
+
+def _both(task_id, prediction):
+    t = _TASKS[task_id]
+    out = f"FINAL ANSWER: {prediction}"
+    return score(out, t["answer"]), score_lenient(out, t["answer"], t["question"])
+
+
+def test_smoke_predictions_scored_as_expected():
+    for task_id, pred, strict, primary in SMOKE:
+        assert _both(task_id, pred) == (strict, primary), (task_id, pred)
+
+
+def test_lenient_only_accepts_units_the_question_names():
+    for task_id, pred in [
+        ("s-low-2", "1 day"),             # question asks in hours
+        ("s-low-1", "95 EUR"),            # question asks in USD
+        ("s-low-1", "95 thousand USD"),   # scale word changes the value
+        ("s-low-1", "approx. 95 USD"),    # hedge before the number
+        ("s-low-1", "95 USD (approx)"),   # hedge after it
+        ("s-low-1", "95 or 100 USD"),     # two values
+        ("s-low-1", "96 USD"),            # wrong number
+    ]:
+        assert _both(task_id, pred) == (False, False), (task_id, pred)
+    assert _both("s-low-1", "$95") == (True, True)
+    assert _both("s-high-1", "2,457.60 USD") == (False, True)
+
+
+def test_lenient_matches_strict_on_text_answers():
+    assert score_lenient("FINAL ANSWER: The Premium plan.", "premium plan", "Which plan?")
+    assert not score_lenient("FINAL ANSWER: Premium plan USD", "premium plan", "in USD?")
+    assert score_lenient("FINAL ANSWER: 3 USD, 4 USD", "3, 4", "Both prices in USD?")

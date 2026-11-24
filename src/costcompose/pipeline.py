@@ -23,7 +23,7 @@ from .agents import (
     retrieve_node,
     single_agent_node,
 )
-from .evaluation import extract_final_answer, score
+from .evaluation import extract_final_answer, score, score_lenient
 from .tasks import Task
 from .tracking import TaskTrace
 
@@ -97,7 +97,8 @@ def run_task(rt: Runtime, task: Task, engine: str = "auto", graph: Any = None) -
     except Exception as exc:  # one failed task must not kill a multi-hour run
         final, error = "", f"{type(exc).__name__}: {exc}"
     latency = rt.trace.elapsed()
-    success = bool(final) and score(final, task.answer)
+    success_strict = bool(final) and score(final, task.answer)
+    success = bool(final) and score_lenient(final, task.answer, task.question)  # primary
     updates = rt.router.end_task(success)  # learned routers update here; heuristic is a no-op
     return {
         "task_id": task.id,
@@ -106,6 +107,7 @@ def run_task(rt: Runtime, task: Task, engine: str = "auto", graph: Any = None) -
         "prediction": extract_final_answer(final),
         "gold": task.answer,
         "success": success,
+        "success_strict": success_strict,
         "routing_policy": rt.router.policy,
         "router_updates": updates,
         "latency_s": latency,
