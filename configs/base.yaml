@@ -55,5 +55,7 @@ prices:
   gpt-4o: {input_per_mtok: 2.50, output_per_mtok: 10.00}
   anthropic/claude-sonnet-4-5: {input_per_mtok: 3.00, output_per_mtok: 15.00}
   anthropic/claude-haiku-4-5: {input_per_mtok: 1.00, output_per_mtok: 5.00}
-  hosted_vllm/meta-llama/Llama-3.1-8B-Instruct: {input_per_mtok: 0.10, output_per_mtok: 0.10}
+  # Llama: a serverless list price (Groq, checked 2026-11-25), like every other model here; the
+  # self-hosted price at our throughput is reported as a sensitivity check (PREREGISTRATION.md).
+  hosted_vllm/meta-llama/Llama-3.1-8B-Instruct: {input_per_mtok: 0.05, output_per_mtok: 0.08}
   text-embedding-3-small: {input_per_mtok: 0.02, output_per_mtok: 0.0}
