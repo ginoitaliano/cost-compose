@@ -1,0 +1,6 @@
+# The proposed cache: structured keys (embed what is asked; exact match on what the answer
+# depends on) plus a cache of resolved subtask answers, whose hits skip the subtask's retrieval
+# and reasoning. Compare with cache_only (text keys) and cache_only_guarded (text keys + guards).
+extends: ../cache_only.yaml
+name: cache_only_structured
+caching: {key: structured, subtask_cache: true}

@@ -44,6 +44,15 @@ practice from deployed semantic caches, adapted to a multi-agent pipeline:
   subtask, not the retrieved passages, whose entities differ almost every time.
 * ``skip_tool_calls`` (above).
 
+Structured keys (``structured=True``). The text key embeds the agent's whole input, in which the
+part that says what is asked (a subtask line) is short and the shared context (task, passages,
+earlier results) is long, so different requests in one task look alike and the same request in
+two tasks looks different. A structured key embeds only what is asked (the question or subtask)
+and puts what the answer depends on (retrieved document IDs, upstream answers, loop history,
+entities of the ask) in the namespace as an exact digest, with one namespace per role. A hit then
+needs a request that means the same thing and rests on exactly the same inputs: semantic match on
+the ask, exact match on its dependencies. The runtime supplies both parts; see ``dependency_key``.
+
 Every entry records where it was written (task run, reasoning loop, role) so the runtime can
 classify each hit: served back into the same loop, from elsewhere in the same task, or from an
 earlier task; and whether it crossed roles or models.
@@ -96,6 +105,12 @@ def extract_entities(text: str) -> frozenset[str]:
         value = float(m.group(0).replace(",", ""))
         found.add(f"num:{value:g}")
     return frozenset(found)
+
+
+def dependency_key(*parts) -> str:
+    """Short exact digest of what a response depends on (JSON-serialisable parts)."""
+    blob = json.dumps(parts, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 def _has_tool_call_args(tool_calls) -> bool:
@@ -234,6 +249,7 @@ class SemanticCache:
         version_key: str | None = None,
         role_scoped: bool = False,
         entity_guard: bool = False,
+        structured: bool = False,
     ) -> None:
         if scope not in {"agent", "pipeline"}:
             raise ValueError(scope)
@@ -246,18 +262,23 @@ class SemanticCache:
         self.version_key = version_key
         self.role_scoped = role_scoped
         self.entity_guard = entity_guard
+        self.structured = structured
         self.stats = CacheStats()
 
-    def _namespace(self, agent: str, model: str, role: str | None = None) -> str:
+    def _namespace(
+        self, agent: str, model: str, role: str | None = None, deps: str | None = None
+    ) -> str:
         ns = f"agent:{agent}" if self.scope == "agent" else "pipeline"
-        if self.role_scoped:
+        if self.role_scoped or self.structured:
             ns = f"{ns}|role:{role or agent}"
+        if deps is not None:
+            ns = f"{ns}|dep:{deps}"
         if self.version_key is not None:
             ns = f"{ns}|version:{self.version_key}"
         return f"{ns}|model:{model}" if self.model_aware else ns
 
     def key_text(self, agent: str, local_input: str, pipeline_context: str) -> str:
-        if self.scope == "agent":
+        if self.structured or self.scope == "agent":
             return local_input
         return f"[{agent}]\n{pipeline_context}\n---\n{local_input}"
 
@@ -269,6 +290,7 @@ class SemanticCache:
         pipeline_context: str,
         role: str | None = None,
         entity_text: str | None = None,
+        deps: str | None = None,
     ) -> tuple[CacheHit | None, np.ndarray, int]:
         """Return (hit or None, query embedding, embedding tokens billed).
 
@@ -279,7 +301,7 @@ class SemanticCache:
         vecs, tokens = self.embedder.embed([self.key_text(agent, local_input, pipeline_context)])
         vec = vecs[0]
         self.stats.lookups[agent] += 1
-        found = self.backend.nearest(self._namespace(agent, model, role), vec)
+        found = self.backend.nearest(self._namespace(agent, model, role, deps), vec)
         if found is None or found[0] < self.threshold:
             return None, vec, tokens
         sim, payload = found
@@ -313,6 +335,7 @@ class SemanticCache:
         role: str | None = None,
         entity_text: str | None = None,
         origin: dict | None = None,
+        deps: str | None = None,
     ) -> bool:
         """Store a response. Returns False if it was withheld (``skip_tool_calls``)."""
         if self.skip_tool_calls and _has_tool_call_args(response.tool_calls):
@@ -324,7 +347,7 @@ class SemanticCache:
             payload["query_entities"] = sorted(extract_entities(query))
         if origin is not None:
             payload["origin"] = origin
-        self.backend.add(self._namespace(agent, model, role), vector, payload)
+        self.backend.add(self._namespace(agent, model, role, deps), vector, payload)
         return True
 
     def reset(self) -> None:

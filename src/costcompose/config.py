@@ -39,6 +39,12 @@ class CachingConfig:
     role_scoped: bool = False  # True: one namespace per role (planner and aggregator separate)
     first_step_only: bool = False  # True: only the first step of a reasoning loop is cached
     entity_guard: bool = False  # True: a hit whose request entities differ is refused
+    # Key construction. "text": embed the agent's whole input (the paper's cache). "structured":
+    # embed only what the request asks (question or subtask) and require an exact match on what
+    # the answer depends on (role, retrieved documents, upstream answers, loop history, entities).
+    key: str = "text"
+    # True: cache each subtask's resolved answer; a hit skips the subtask's retrieval and reasoning.
+    subtask_cache: bool = False
     backend: str = "memory"  # "memory" | "redis"
     redis_url: str = "redis://localhost:6379/0"
 
@@ -178,6 +184,10 @@ def validate(cfg: ExperimentConfig) -> None:
         raise ValueError(
             f"caching.backend must be 'memory' or 'redis', got {cfg.caching.backend!r}"
         )
+    if cfg.caching.key not in {"text", "structured"}:
+        raise ValueError(f"caching.key must be 'text' or 'structured', got {cfg.caching.key!r}")
+    if cfg.caching.subtask_cache and cfg.mode != "multi_agent":
+        raise ValueError("caching.subtask_cache needs mode: multi_agent (it caches subtasks)")
     if not 0.0 < cfg.caching.threshold <= 1.0:
         raise ValueError("caching.threshold must be in (0, 1]")
     if cfg.routing.enabled:

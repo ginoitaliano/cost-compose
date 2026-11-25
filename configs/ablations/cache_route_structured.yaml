@@ -1,0 +1,4 @@
+# cache_route with the structured cache: H1 with the proposed cache.
+extends: cache_route.yaml
+name: cache_route_structured
+caching: {key: structured, subtask_cache: true}

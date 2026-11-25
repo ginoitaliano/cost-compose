@@ -70,14 +70,16 @@ def test_langgraph_engine_matches_native():
     if importlib.util.find_spec("langgraph") is None:
         return  # optional dependency; exercised in CI's "full" job
     task = load_tasks(SAMPLE_TASKS)[4]
-    for name in ("composed", "composed_guarded", "single_agent_baseline", "single_agent_route"):
+    for name in ("composed", "composed_guarded", "composed_structured", "single_agent_baseline",
+                 "single_agent_route"):
         a = run_task(_runtime(name), task, engine="native")
         b = run_task(_runtime(name), task, engine="langgraph")
         assert b["error"] is None, (name, b["error"])
         for k in ("prediction", "llm_calls", "cache_hits", "routing", "subtasks",
                   "early_stops", "cache_induced_early_stops", "entity_mismatch_hits",
                   "hits_by_origin", "cache_bypassed", "cross_role_hits",
-                  "entity_guard_refusals", "routing_scores", "retrieved_doc_ids"):
+                  "entity_guard_refusals", "routing_scores", "retrieved_doc_ids",
+                  "subtask_cache_hits", "subtask_hits_by_origin"):
             assert a[k] == b[k], (name, k)
 
 

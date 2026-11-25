@@ -1,0 +1,4 @@
+# Structured keys without the subtask cache: separates the two parts of the proposed cache.
+extends: ../cache_only.yaml
+name: cache_only_structured_keys
+caching: {key: structured}
