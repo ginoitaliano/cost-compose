@@ -44,7 +44,8 @@ Every LLM request from every node goes through one choke point (`Runtime.call_ll
 | `composed_skip_tool_calls` | `composed` | `caching.skip_tool_calls: true` | savings from replayed action calls |
 | `cache_only_guarded` | `cache_only` | all four cache guards on | false hits removed, caching alone |
 | `composed_guarded` | `composed` | all four cache guards on | composition with the guarded cache |
-| `cache_route_guarded` | `cache_route` | all four cache guards on | Subtask cache | Resolved subtask answers served across subtasks and tasks; a hit skips retrieval and reasoning | `configs.<name>.cache_correctness.subtask_cache`, "Subtask cache" in `summary.md` |
+| `cache_route_guarded` | `cache_route` | all four cache guards on | Oracle routing bound | Per task run, the cheapest single-model config that succeeded: the most a task-level router over the ladder's models could save. Routed configs are placed against it | `hypotheses.oracle_routing_bound`, "Single models and the oracle bound" in `summary.md` |
+| Subtask cache | Resolved subtask answers served across subtasks and tasks; a hit skips retrieval and reasoning | `configs.<name>.cache_correctness.subtask_cache`, "Subtask cache" in `summary.md` |
 | H1 with the structured cache | The H1 test with `cache_only_structured` and `cache_route_structured` | `hypotheses.H1_structured_cache` |
 | H1 with the guarded cache |
 | `cache_only_role_scoped` | `cache_only` | `caching.role_scoped: true` | cross-role hits (plan served as the answer) |
@@ -55,6 +56,7 @@ Every LLM request from every node goes through one choke point (`Runtime.call_ll
 | `composed_structured` | `composed` | same | composition with the proposed cache |
 | `cache_route_structured` | `cache_route` | same | H1 with the proposed cache |
 | `cache_only_structured_keys` | `cache_only` | `caching.key: structured` only | structured keys without the subtask cache |
+| `llama_only`, `haiku_only`, `sonnet_only` | `base` | every request on one model of the ladder | each model's cost and success; with `baseline`, the oracle routing bound |
 | `single_agent_baseline` | `base` | `mode: single_agent` | H3 single-agent arm, no techniques |
 | `single_agent_route` | `single_agent_baseline` | routing on | H3 single-agent routing drop |
 | `learned_route` | `route_only` | `routing.policy: linucb` | learned vs heuristic routing |
@@ -148,6 +150,7 @@ make run-reuse      # -> results/full_reuse/
 # Development set for method work (MuSiQue, disjoint from both suites, 20 per stratum)
 make suite-dev      # data/tasks/dev.jsonl, corpus in data/corpus_dev/
 make run-dev        # baseline and the caches on the development set, seed 0 -> results/dev/
+make run-dev-refs   # single models, routing and the oracle bound on the development set
 ```
 
 GAIA tasks come from the validation split only, because it is the only split with public answers. `prepare_gaia.py` excludes tasks the pipeline cannot attempt. Its tools are a calculator and search over the local corpus, so it drops tasks that need web browsing, tasks with an attached file it cannot read (any attachment by default; `--readable-extensions` allows some), and tasks that need multimodal input. The decision uses GAIA's metadata: the `file_name` field and the annotators' tool list, plus URLs or YouTube links in the question. Exclusion counts by reason are printed and written to `<out>.exclusions.json`, which holds counts only, no task content. Tasks with no annotator tool list are kept and counted so they can be reviewed by hand. If fewer eligible tasks remain than requested, the script warns rather than padding. In practice only 18 of the 165 validation tasks qualify (8 low, 6 medium, 4 high): 123 need web browsing, 41 need multimodal input and 25 have attachments (a task can have several reasons).
@@ -248,6 +251,10 @@ The entity extractor is a small set of regular expressions (dates, identifiers s
 Both engines call the same node functions. LangGraph is the default when installed and is what LangSmith traces; the native engine exists so the core runs and tests with only NumPy and PyYAML. CI checks that both produce the same answers, call counts, cache hits, hit origins, guard refusals, bypassed requests, routing and routing scores, early stops, cache-induced stops and entity-mismatch hits, in `multi_agent` mode with the naive and the guarded cache and in `single_agent` mode.
 
 In the reasoning loop, every tool call is written into the conversation as its own assistant turn followed by its result, even when a model requested several in one response. Some chat templates (Llama 3.1's) reject a turn with more than one tool call, and with routing, the step after a GPT-4o or Claude call that used parallel tools can go to Llama. Every provider accepts the one-call-per-turn form, so all configurations use it.
+
+Every record also carries `f1`, MuSiQue's official answer F1 (token overlap after SQuAD normalisation, best of the reference answer and its aliases). The match scores give no credit for "1999" against "30 November 1999"; F1 gives partial credit, which is how multi-hop QA is usually reported. The report shows mean F1 per config and a paired bootstrap CI on F1 differences next to both success scores.
+
+The reasoner, aggregator and single-agent prompts ask for a best answer rather than "unknown", and for the answer itself rather than a sentence. On the development set, 5 of the 21 baseline failures with every supporting paragraph retrieved were answers such as "Unknown" or "Not available", and one was a sentence containing a wrong entity. These prompt changes alter every configuration's requests, so runs before this change are not comparable with runs after it.
 
 Documents are chunked at about 800 characters on blank lines, and a heading is always kept with the text after it. Before this, a document whose first paragraph was longer than about 790 characters split into a title-only passage and an untitled one, which affected most Wikipedia paragraphs in the MuSiQue corpus. The sample corpus is not affected.
 

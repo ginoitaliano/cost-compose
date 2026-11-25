@@ -4,6 +4,10 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- Answer F1 (MuSiQue's official metric) on every record; mean F1 per config and paired F1 differences in the report.
+- Prompts: reasoner, aggregator and single agent give a best answer instead of "unknown" and the answer rather than a sentence. This changes every configuration's requests; earlier runs are not comparable.
+- Reference points: `llama_only`, `haiku_only`, `sonnet_only` (core). The report adds each single model's cost and success and the task-level oracle bound, with routed configs placed against it. `make run-dev-refs` runs them on the development set.
+- Makefile targets set `LITELLM_LOG=ERROR` by default.
 - Structured cache: `caching.key: structured` embeds what a request asks and matches what its answer depends on exactly (role, retrieved document IDs, upstream answers, loop history, entities of the ask); `caching.subtask_cache: true` caches resolved subtask answers and skips the subtask on a hit. Defaults (`text`, `false`) leave every existing config unchanged. Core configs `cache_only_structured`, `composed_structured`, `cache_route_structured`; extended `cache_only_structured_keys`. The report adds "Subtask cache", `H1_structured_cache`, and paired comparisons of the structured cache against the guarded one. `make run-dev` runs the caches on the development set.
 - Development set: `prepare_musique.py --exclude` and `make suite-dev` (20 per stratum, disjoint from both evaluation suites, own corpus). Method changes are made on it; the evaluation suites run once.
 - Retrieval diagnostics: every MuSiQue task file gets `<out>.support.json` (supporting-paragraph document IDs per task and per hop, resolved sub-questions); run records gain `retrieved_doc_ids`; `scripts/retrieval_check.py ceiling | pipeline` reports recall@k with question and gold sub-question queries, and pipeline support recall with success split by it.
