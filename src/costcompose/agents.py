@@ -180,16 +180,19 @@ def _reasoning_loop(
         local = user + "\n" + "\n".join(transcript)
         resp = rt.call_llm(agent, messages, feats, local, pipeline_context, use_tools=True)
         if resp.tool_calls:
-            messages.append({
-                "role": "assistant",
-                "content": resp.content or None,
-                "tool_calls": [
-                    {"id": tc.id, "type": "function",
-                     "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
-                    for tc in resp.tool_calls
-                ],
-            })
-            for tc in resp.tool_calls:
+            # History holds one tool call per assistant turn, each followed by its result, even
+            # when a model requested several at once. Every provider accepts this form, while
+            # some chat templates (Llama 3.1) reject several calls in one turn; with routing,
+            # the next step of this loop may go to such a model.
+            for i, tc in enumerate(resp.tool_calls):
+                messages.append({
+                    "role": "assistant",
+                    "content": (resp.content or None) if i == 0 else None,
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
+                    ],
+                })
                 result = rt.tools.call(tc.name, tc.arguments)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                 transcript.append(f"tool {tc.name}({tc.arguments}) -> {result}")

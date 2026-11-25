@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import load_config
 from . import judge, spotcheck
-from .experiment import run_experiment, write_report
+from .experiment import PreflightError, run_experiment, write_report
 from .tasks import load_tasks, strata
 
 DEFAULT_CONFIGS = ["baseline", "cache_only", "route_only", "composed"]
@@ -43,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--engine", choices=["auto", "native", "langgraph"], default="auto")
     run.add_argument("--cache-backend", choices=["redis", "memory"], default=None,
                      help="override caching.backend (--dry-run defaults to memory)")
+    run.add_argument("--no-retry-errors", action="store_true",
+                     help="on resume, keep task runs that ended in an error instead of retrying")
+    run.add_argument("--skip-preflight", action="store_true",
+                     help="do not call each model once before the first task")
 
     rep = sub.add_parser("report", help="rebuild summary.json / summary.md from runs.jsonl")
     rep.add_argument("out", type=Path)
@@ -142,9 +146,14 @@ def main(argv: list[str] | None = None) -> int:
     backend = "fake" if args.dry_run else args.backend
     cache_backend = args.cache_backend or ("memory" if backend == "fake" else None)
     tasks = load_tasks(args.tasks, limit=args.limit)
-    run_experiment(_resolve_configs(args.configs, args.config_dir), tasks, args.corpus,
-                   args.seeds, args.out, backend=backend, engine=args.engine,
-                   cache_backend=cache_backend)
+    try:
+        run_experiment(_resolve_configs(args.configs, args.config_dir), tasks, args.corpus,
+                       args.seeds, args.out, backend=backend, engine=args.engine,
+                       cache_backend=cache_backend, retry_errors=not args.no_retry_errors,
+                       check_models=not args.skip_preflight)
+    except PreflightError as exc:
+        print(exc, file=sys.stderr)
+        return 2
     print((args.out / "summary.md").read_text())
     if backend == "fake":
         print("\nNote: --dry-run uses an offline fake model. These numbers check the plumbing; "
