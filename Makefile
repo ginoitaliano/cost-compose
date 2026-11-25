@@ -1,4 +1,4 @@
-.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run-dev run-dev-refs run run-extended run-reuse report spotcheck docker clean
+.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run-dev run-dev-refs run run-a run-b run-c merge run-extended run-reuse report spotcheck docker clean
 
 # LiteLLM logs every call at INFO; keep errors only (override: make run LITELLM_LOG=INFO).
 export LITELLM_LOG ?= ERROR
@@ -46,35 +46,58 @@ suite-reuse:
 		> data/tasks/suite_reuse.jsonl
 	costcompose validate --tasks data/tasks/suite_reuse.jsonl
 
-# Configs the paper's Table 1 and hypotheses H1-H3 need, plus the guarded-cache arm.
+# The evaluation run fixed in PREREGISTRATION.md: Table 1, the H1 configs for each cache
+# design (naive, guarded, structured), H2, the H3 single-agent arm, and the single-model reference
+# points for the oracle bound.
 CORE_CONFIGS = baseline cache_only route_only composed \
 	configs/ablations/cache_route.yaml configs/ablations/cache_only_pipeline.yaml \
-	configs/ablations/composed_model_aware.yaml \
 	configs/ablations/single_agent_baseline.yaml configs/ablations/single_agent_route.yaml \
-	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
-	configs/ablations/cache_route_guarded.yaml \
-	configs/ablations/cache_only_structured.yaml configs/ablations/composed_structured.yaml \
-	configs/ablations/cache_route_structured.yaml \
+	configs/ablations/cache_only_guarded.yaml configs/ablations/cache_route_guarded.yaml \
+	configs/ablations/cache_only_structured.yaml configs/ablations/cache_route_structured.yaml \
 	configs/ablations/llama_only.yaml configs/ablations/haiku_only.yaml \
 	configs/ablations/sonnet_only.yaml
 
-# Ablations beyond the paper: individual early stopping, learned routing, composition effect 4,
-# tool-call guard, one cache guard at a time. Every file in configs/ablations/ must be in
-# exactly one of the two lists (tests/test_config.py checks this).
+# Ablations outside the preregistered run: individual early stopping, learned routing, composition
+# effect 4, cross-model hits, the guarded and structured caches under full composition, one cache
+# guard at a time. Every file in configs/ablations/ must be in exactly one of the two lists
+# (tests/test_config.py checks this).
 EXTENDED_CONFIGS = configs/ablations/early_stop_only.yaml \
 	configs/ablations/learned_route.yaml configs/ablations/composed_learned.yaml \
 	configs/ablations/composed_exclude_cached_drafts.yaml \
 	configs/ablations/composed_skip_tool_calls.yaml \
+	configs/ablations/composed_model_aware.yaml configs/ablations/composed_guarded.yaml \
+	configs/ablations/composed_structured.yaml \
 	configs/ablations/cache_only_role_scoped.yaml configs/ablations/cache_only_first_step.yaml \
 	configs/ablations/cache_only_entity_guard.yaml \
 	configs/ablations/cache_only_skip_tool_calls.yaml \
 	configs/ablations/cache_only_structured_keys.yaml
 
-RUN_ARGS = --tasks data/tasks/suite.jsonl --corpus data/corpus --seeds 0 1 2 --out results/full
+RUN_IN = --tasks data/tasks/suite.jsonl --corpus data/corpus --seeds 0 1 2
+RUN_ARGS = $(RUN_IN) --out results/full
 
-# Full study, 3 seeds. Needs keys, Redis and the vLLM server.
+# Full study, 3 seeds, one process. Needs keys, Redis and the vLLM server.
 run:
 	costcompose -v run --configs $(CORE_CONFIGS) $(RUN_ARGS)
+
+# The same run as three processes (about a third of the wall-clock time). Start each in its own
+# terminal or in the background; each part resumes on its own. Then `make merge`.
+# The three lists together are exactly CORE_CONFIGS (tests/test_config.py checks this).
+PART_A = route_only configs/ablations/haiku_only.yaml configs/ablations/sonnet_only.yaml \
+	configs/ablations/cache_route.yaml
+PART_B = configs/ablations/cache_route_guarded.yaml configs/ablations/cache_route_structured.yaml \
+	configs/ablations/single_agent_baseline.yaml configs/ablations/single_agent_route.yaml \
+	configs/ablations/llama_only.yaml configs/ablations/cache_only_pipeline.yaml
+PART_C = baseline cache_only composed configs/ablations/cache_only_guarded.yaml \
+	configs/ablations/cache_only_structured.yaml
+run-a:
+	costcompose -v run --configs $(PART_A) $(RUN_IN) --out results/full/parts/a
+run-b:
+	costcompose -v run --configs $(PART_B) $(RUN_IN) --out results/full/parts/b
+run-c:
+	costcompose -v run --configs $(PART_C) $(RUN_IN) --out results/full/parts/c
+merge:
+	cat results/full/parts/*/runs.jsonl > results/full/runs.jsonl
+	costcompose report results/full
 
 # Development set: MuSiQue only, disjoint from both evaluation suites, 20 per stratum, with the
 # reuse stream's clustering so cache methods have reuse to work with. All method changes are made
@@ -102,11 +125,10 @@ run-dev-refs:
 		--corpus data/corpus_dev --seeds 0 --out results/dev
 
 # Caching configs on the reuse stream, into their own output directory.
-REUSE_CONFIGS = baseline cache_only route_only composed \
+REUSE_CONFIGS = baseline cache_only route_only \
 	configs/ablations/cache_route.yaml configs/ablations/cache_only_pipeline.yaml \
-	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
-	configs/ablations/cache_route_guarded.yaml configs/ablations/cache_only_structured.yaml \
-	configs/ablations/composed_structured.yaml configs/ablations/cache_route_structured.yaml
+	configs/ablations/cache_only_guarded.yaml configs/ablations/cache_route_guarded.yaml \
+	configs/ablations/cache_only_structured.yaml configs/ablations/cache_route_structured.yaml
 run-reuse:
 	costcompose -v run --configs $(REUSE_CONFIGS) --tasks data/tasks/suite_reuse.jsonl \
 		--corpus data/corpus_reuse --seeds 0 1 2 --out results/full_reuse

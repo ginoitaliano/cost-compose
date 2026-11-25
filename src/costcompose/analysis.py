@@ -57,6 +57,14 @@ def _ci95(samples: np.ndarray) -> list[float]:
     return [float(lo), float(hi)]
 
 
+def _p_boot(samples: np.ndarray) -> float | None:
+    """Two-sided bootstrap p-value for 'the estimate is 0': twice the smaller tail mass at 0."""
+    finite = samples[np.isfinite(samples)]
+    if not len(finite):
+        return None
+    return float(min(1.0, 2 * min(np.mean(finite <= 0), np.mean(finite >= 0))))
+
+
 def _h1_test(
     records: list[dict[str, Any]], target: str, cache: str = "cache_only"
 ) -> dict[str, Any] | None:
@@ -100,6 +108,7 @@ def _h1_test(
             "independent_prediction": independent,
             "interaction": interaction,
             "interaction_ci95": ci,
+            "interaction_p_boot": _p_boot(b_obs - b_ind),
             "observed_over_independent": s_obs / independent if independent else None,
             "verdict": verdict,
         },
@@ -125,6 +134,8 @@ SCALARS = (
     "cache_hit_rate",
     "cross_model_hit_share",
     "llm_calls_per_task",
+    "prompt_tokens_per_task",
+    "completion_tokens_per_task",
     "early_stops_per_task",
     "cache_induced_early_stops_per_task",
 )
@@ -163,6 +174,10 @@ def _per_seed(rows: list[dict[str, Any]]) -> dict[str, Any]:
             sum(r["cross_model_hits"] for r in rows) / hits if hits else 0.0
         ),
         "llm_calls_per_task": float(np.mean([r["llm_calls"] for r in rows])),
+        "prompt_tokens_per_task": float(np.mean([r.get("prompt_tokens", 0) for r in rows])),
+        "completion_tokens_per_task": float(
+            np.mean([r.get("completion_tokens", 0) for r in rows])
+        ),
         "early_stops_per_task": float(np.mean([r["early_stops"] for r in rows])),
         "cache_induced_early_stops_per_task": float(
             np.mean([r.get("cache_induced_early_stops", 0) for r in rows])
@@ -484,6 +499,7 @@ def _paired_delta(
         "config_mean": float(m[1].mean()),
         "delta": float(m[1].mean() - m[0].mean()),
         "delta_ci95": _ci95(b_cfg - b_ref),
+        "p_boot": _p_boot(b_cfg - b_ref),
     }
     if relative:
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -625,6 +641,38 @@ def _oracle(records: list[dict[str, Any]], configs: dict[str, Any]) -> dict[str,
     }
     for v in realised.values():
         v["share_of_seed_averaged_saving"] = (v["saving"] / a_saving) if a_saving else None
+
+    # Iso-success oracle: never worse than baseline on any task. Per task, the cheapest model
+    # whose seed-averaged success is at least baseline's; tasks baseline never solves stay on
+    # baseline. "with_give_up" sends those tasks to the cheapest model instead, which isolates
+    # how much of the oracle's saving comes from tasks no one solves.
+    s_of = {(m, t): np.mean([rows[(m, t, s)]["success"] for tt, s in keys if tt == t])
+            for m in members for t in tasks}
+    c_of = {(m, t): np.mean([rows[(m, t, s)]["cost_usd"] for tt, s in keys if tt == t])
+            for m in members for t in tasks}
+    cheapest = members[0]
+
+    def iso_pick(t: str, give_up: bool) -> str:
+        sb = s_of[("baseline", t)]
+        if sb == 0:
+            return cheapest if give_up else "baseline"
+        return min((c_of[(m, t)], m) for m in members if s_of[(m, t)] >= sb)[1]
+
+    for label, give_up in (("iso_success", False), ("iso_success_with_give_up", True)):
+        pick = [iso_pick(t, give_up) for t in tasks]
+        cost = np.array([c_of[(m, t)] for m, t in zip(pick, tasks, strict=True)])
+        succ = np.array([s_of[(m, t)] for m, t in zip(pick, tasks, strict=True)])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sv = 1 - cost.sum() / base.sum()
+            b_sv = 1 - cost[idx].sum(axis=1) / base[idx].sum(axis=1)
+        out[label] = {
+            "saving": float(sv),
+            "saving_ci95": _ci95(b_sv),
+            "expected_success": float(succ.mean()),
+            "baseline_success": float(np.mean([s_of[("baseline", t)] for t in tasks])),
+            "picks": {m: _rate(pick.count(m), len(tasks)) for m in members},
+            "n_tasks": len(tasks),
+        }
     return out
 
 
@@ -714,6 +762,62 @@ def _h3_test(records: list[dict[str, Any]], configs: dict[str, Any]) -> dict[str
     return out
 
 
+# Confirmatory estimands fixed in PREREGISTRATION.md, Holm-corrected together. Everything else
+# in the report is exploratory.
+CONFIRMATORY = (
+    ("C1", "naive cache vs baseline: success difference", "baseline", "cache_only", "success"),
+    ("C2", "naive cache vs baseline: cost difference", "baseline", "cache_only", "cost_usd"),
+    ("C3", "H1 interaction (naive cache, cache_route)", None, None, "h1"),
+    ("C4", "heuristic routing vs baseline: cost difference", "baseline", "route_only",
+     "cost_usd"),
+)
+
+
+def _holm(pvals: list[float | None]) -> list[float | None]:
+    idx = sorted((p, i) for i, p in enumerate(pvals) if p is not None)
+    out: list[float | None] = [None] * len(pvals)
+    running, m = 0.0, len(idx)
+    for rank, (p, i) in enumerate(idx):
+        running = max(running, min(1.0, (m - rank) * p))
+        out[i] = running
+    return out
+
+
+def confirmatory(configs: dict[str, Any], records: list[dict[str, Any]],
+                 h1: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    rows = []
+    for cid, label, ref, cfg, kind in CONFIRMATORY:
+        if kind == "h1":
+            if not h1 or h1.get("compared_config") != "cache_route":
+                continue
+            t = h1["primary_independence_test"]
+            rows.append({"id": cid, "label": label, "estimate": t["interaction"],
+                         "ci95": t["interaction_ci95"], "p": t.get("interaction_p_boot"),
+                         "test": "paired bootstrap", "n_tasks": h1["n_tasks"]})
+            continue
+        if ref not in configs or cfg not in configs:
+            continue
+        c = compare(records, ref, cfg)
+        if c is None:
+            continue
+        if kind == "success":
+            d = c["success"]
+            rows.append({"id": cid, "label": label, "estimate": d["delta"],
+                         "ci95": d["delta_ci95"], "p": d["mcnemar"]["p_value"],
+                         "test": "exact McNemar", "n_tasks": d["n_tasks"]})
+        else:
+            d = c[kind]
+            rows.append({"id": cid, "label": label, "estimate": d.get("relative", d["delta"]),
+                         "ci95": d.get("relative_ci95", d["delta_ci95"]), "p": d["p_boot"],
+                         "test": "paired bootstrap", "n_tasks": d["n_tasks"]})
+    if not rows:
+        return None
+    for r, adj in zip(rows, _holm([r["p"] for r in rows]), strict=True):
+        r["p_holm"] = adj
+        r["supported"] = adj is not None and adj < 0.05
+    return rows
+
+
 def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     # H1: prefer the clean cache+route ablation; fall back to the full composed config.
@@ -766,6 +870,9 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
             }
     if learned:
         out["learned_vs_heuristic_routing"] = learned
+    conf = confirmatory(configs, records, out.get("H1_sub_additive"))
+    if conf is not None:
+        out["confirmatory"] = conf
     oracle = _oracle(records, configs)
     if oracle is not None:
         out["oracle_routing_bound"] = oracle
@@ -857,6 +964,25 @@ def _mechanism_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
     return lines
 
 
+def _confirmatory_markdown(rows: list[dict[str, Any]] | None) -> list[str]:
+    if not rows:
+        return []
+    lines = [
+        "## Confirmatory tests", "",
+        "Fixed in PREREGISTRATION.md before the evaluation run. Holm correction across the "
+        "tests listed; everything else in this report is exploratory. Success differences in "
+        "percentage points; cost differences relative to the reference; the H1 interaction in "
+        "percentage points of baseline cost.", "",
+        "| ID | Estimand | Estimate (95% CI) | Test | p | p (Holm) | n tasks |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for r in rows:
+        est = f"{100 * r['estimate']:+.1f} {_pct_ci(r['ci95'])}"
+        lines.append(f"| {r['id']} | {r['label']} | {est} | {r['test']} | {_p(r['p'])} "
+                     f"| {_p(r['p_holm'])} | {r['n_tasks']} |")
+    return lines + [""]
+
+
 def _oracle_markdown(o: dict[str, Any] | None) -> list[str]:
     if not o:
         return []
@@ -888,6 +1014,17 @@ def _oracle_markdown(o: dict[str, Any] | None) -> list[str]:
             f"saving {100 * a['saving']:.1f}% 95% CI {_pct_ci(a['saving_ci95'])}. With one seed "
             "per task it equals the per-run oracle.",
         ]
+    for label, title in (("iso_success", "Iso-success oracle (never worse than baseline on "
+                          "any task; tasks baseline never solves stay on baseline)"),
+                         ("iso_success_with_give_up", "Iso-success oracle that also sends "
+                          "tasks baseline never solves to the cheapest model")):
+        v = o.get(label)
+        if v:
+            lines += ["", f"{title}: saving {100 * v['saving']:.1f}% 95% CI "
+                      f"{_pct_ci(v['saving_ci95'])}, expected success "
+                      f"{100 * v['expected_success']:.1f}% vs baseline "
+                      f"{100 * v['baseline_success']:.1f}% (n={v['n_tasks']} tasks)."]
+    lines.append("")
     for c, v in o.get("routed", {}).items():
         share = v.get("share_of_seed_averaged_saving", v["share_of_oracle_saving"])
         lines.append(f"{c} saves {100 * v['saving']:.1f}%"
@@ -999,7 +1136,9 @@ def _fmt_n(ms: dict[str, float], n: int, pct: bool = False) -> str:
     return f"{_fmt(ms, pct=pct)} (n={n})"
 
 
-def _p(x: float) -> str:
+def _p(x: float | None) -> str:
+    if x is None:
+        return "–"
     return "<0.001" if x < 0.001 else f"{x:.3f}"
 
 
@@ -1121,6 +1260,7 @@ def to_markdown(summary: dict[str, Any]) -> str:
     order += sorted(c for c in cfgs if c not in order)
     hyp = summary["hypotheses"]
     lines = ["# Results", ""]
+    lines += _confirmatory_markdown(hyp.get("confirmatory"))
     lines += _comparisons_markdown(summary.get("comparisons", []))
     lines += _scoring_markdown(cfgs, order, summary.get("comparisons", []))
     lines += _h1_markdown(hyp.get("H1_sub_additive"))
@@ -1141,17 +1281,19 @@ def to_markdown(summary: dict[str, Any]) -> str:
         "(tasks x seeds) for success and cache lookups for the cache hit rate.",
         "",
         "| Config | Cost / task | P50 latency (s) | P95 latency (s) | Success | Cache hit "
-        "| LLM calls / task |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| LLM calls / task | Input tokens / task | Output tokens / task |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for c in order:
         r, n = cfgs[c], cfgs[c]["n"]
         hit = _fmt_n(r["cache_hit_rate"], n["cache_lookups"], pct=True) \
             if n["cache_lookups"] else "–"
+        tok_in = r.get("prompt_tokens_per_task", {"mean": 0.0})["mean"]
+        tok_out = r.get("completion_tokens_per_task", {"mean": 0.0})["mean"]
         lines.append(
             f"| {c} | {_fmt(r['cost_usd'], money=True)} | {_fmt(r['latency_p50_s'])} "
             f"| {_fmt(r['latency_p95_s'])} | {_fmt_n(r['success_rate'], n['task_runs'], True)} "
-            f"| {hit} | {_fmt(r['llm_calls_per_task'])} |"
+            f"| {hit} | {_fmt(r['llm_calls_per_task'])} | {tok_in:,.0f} | {tok_out:,.0f} |"
         )
     lines += ["", "## Success by complexity", "",
               "Mean ± std across seeds; n is task runs in the stratum (tasks x seeds).", "",

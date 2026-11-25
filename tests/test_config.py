@@ -84,3 +84,17 @@ def test_every_ablation_is_in_exactly_one_make_target():
     on_disk = {p.stem for p in (CONFIGS / "ablations").glob("*.yaml")}
     assert lists["CORE_CONFIGS"] | lists["EXTENDED_CONFIGS"] == on_disk
     assert not lists["CORE_CONFIGS"] & lists["EXTENDED_CONFIGS"]
+
+
+def test_parallel_parts_cover_the_core_run_exactly():
+    import re
+
+    text = (CONFIGS.parent / "Makefile").read_text().replace("\\\n", " ")
+
+    def items(name):
+        m = re.search(rf"^{name}\s*=\s*(.+)$", text, re.MULTILINE)
+        return m.group(1).split()
+
+    parts = items("PART_A") + items("PART_B") + items("PART_C")
+    assert sorted(parts) == sorted(items("CORE_CONFIGS"))
+    assert len(parts) == len(set(parts))

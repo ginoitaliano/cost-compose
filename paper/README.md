@@ -34,6 +34,7 @@
 | Structured cache keys and subtask cache | `caching.key`, `caching.subtask_cache`; `cache.dependency_key`, `Runtime.subtask_lookup`; `configs/ablations/*_structured*.yaml` |
 | H1 with the structured cache | `hypotheses.H1_structured_cache` |
 | Single-model reference points and the oracle routing bound | `configs/ablations/{llama,haiku,sonnet}_only.yaml`, `analysis._oracle` |
+| Preregistered confirmatory tests (C1-C4) and iso-success oracle | `PREREGISTRATION.md`; `analysis.confirmatory`, `analysis._oracle` |
 | Answer F1 | `evaluation.answer_f1`, `f1` per record |
 | Routing score distribution | `routing_scores` per record, `analysis._routing_scores` |
 | Paired statistics (McNemar, paired bootstrap) | `analysis.compare` |

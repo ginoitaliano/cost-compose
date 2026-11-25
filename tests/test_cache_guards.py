@@ -181,3 +181,20 @@ def test_old_records_without_mechanism_fields_still_summarize():
     s = summarize(old)
     assert s["configs"]["cache_only"]["cache_correctness"]["mechanisms"] is None
     assert s["configs"]["route_only"]["routing_scores"] is None
+
+
+def test_report_leads_with_the_confirmatory_tests():
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        abl = CONFIGS / "ablations"
+        assert main(["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks",
+                     str(SAMPLE_TASKS), "--corpus", str(SAMPLE_CORPUS), "--seeds", "0", "1",
+                     "--out", str(out), "--configs", "baseline", "cache_only", "route_only",
+                     str(abl / "cache_route.yaml")]) == 0
+        summary = json.loads((out / "summary.json").read_text())
+        md = (out / "summary.md").read_text()
+    ids = [r["id"] for r in summary["hypotheses"]["confirmatory"]]
+    assert ids == ["C1", "C2", "C3", "C4"]
+    assert all("p_holm" in r for r in summary["hypotheses"]["confirmatory"])
+    assert md.index("## Confirmatory tests") < md.index("## Paired comparisons")
+    assert "Input tokens / task" in md

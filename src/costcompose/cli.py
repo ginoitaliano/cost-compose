@@ -51,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
 
     rep = sub.add_parser("report", help="rebuild summary.json / summary.md from runs.jsonl")
     rep.add_argument("out", type=Path)
+    rep.add_argument("--exclude-tasks", type=Path, nargs="*", default=[],
+                     help="task files whose task IDs are left out (sensitivity analysis)")
+    rep.add_argument("--name", default=None,
+                     help="output file stem (default: summary, or summary.excluded with "
+                          "--exclude-tasks)")
 
     val = sub.add_parser("validate", help="check configs and a task file without running")
     val.add_argument("--configs", nargs="+", default=DEFAULT_CONFIGS)
@@ -146,8 +151,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "report":
-        write_report(args.out)
-        print((args.out / "summary.md").read_text())
+        excl = {json.loads(x)["id"] for p in args.exclude_tasks
+                for x in p.read_text().splitlines() if x.strip()}
+        name = args.name or ("summary.excluded" if excl else "summary")
+        write_report(args.out, excl or None, name)
+        print((args.out / f"{name}.md").read_text())
         return 0
 
     backend = "fake" if args.dry_run else args.backend
