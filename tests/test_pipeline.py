@@ -77,7 +77,7 @@ def test_langgraph_engine_matches_native():
         for k in ("prediction", "llm_calls", "cache_hits", "routing", "subtasks",
                   "early_stops", "cache_induced_early_stops", "entity_mismatch_hits",
                   "hits_by_origin", "cache_bypassed", "cross_role_hits",
-                  "entity_guard_refusals", "routing_scores"):
+                  "entity_guard_refusals", "routing_scores", "retrieved_doc_ids"):
             assert a[k] == b[k], (name, k)
 
 

@@ -37,6 +37,18 @@ another selected task, so the no-reuse stream's incidental reuse is measured too
         --reuse-share 0.5 --out data/tasks/musique_reuse.jsonl \
         --corpus-dir data/corpus_reuse/musique
 
+Development set. --exclude takes task files whose MuSiQue questions must not be selected, so
+a development set can be drawn disjoint from the evaluation suites. Method changes are made on
+the development set only; the evaluation suites are run once.
+
+    python scripts/prepare_musique.py --per-stratum 20 --reuse-share 0.5 --seed 1 \
+        --exclude data/tasks/musique_subset.jsonl data/tasks/musique_reuse.jsonl \
+        --out data/tasks/dev.jsonl --corpus-dir data/corpus_dev/musique
+
+Every run also writes <out>.support.json: for each task, the corpus document IDs of its
+supporting paragraphs and its single-hop sub-questions with earlier answers filled in. It is
+for retrieval diagnostics (scripts/retrieval_check.py), never shown to the pipeline.
+
 The SHA-256 of the input file is logged so the exact data can be cited and checked. Outputs are
 git-ignored like the GAIA subset.
 """
@@ -90,6 +102,11 @@ def classify(rec: dict) -> tuple[str | None, str | None]:
     if hops not in STRATA:
         return None, "unsupported_hops"
     return STRATA[hops], None
+
+
+def drop_excluded(records: list[dict], exclude: set[str]) -> list[dict]:
+    """Remove records whose task ID (musique-<id>) is in ``exclude``."""
+    return [r for r in records if f"musique-{r.get('id')}" not in exclude]
 
 
 def select(records: list[dict], need: dict[str, int], seed: int) -> tuple[dict, dict]:
@@ -218,6 +235,43 @@ def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40] or "paragraph"
 
 
+def doc_id(paragraph: dict) -> str:
+    """The corpus document ID (file stem) of a paragraph, as the vector store reports it."""
+    title, text = paragraph.get("title", ""), paragraph.get("paragraph_text", "")
+    key = hashlib.sha1(f"{title}\n{text}".encode()).hexdigest()[:12]
+    return f"{_slug(title)}-{key}"
+
+
+def resolved_subquestions(rec: dict) -> list[str]:
+    """Single-hop questions with #k replaced by the k-th hop's answer."""
+    answers = [d.get("answer", "") for d in rec["question_decomposition"]]
+    return [re.sub(r"#(\d+)", lambda m: answers[int(m.group(1)) - 1]
+                   if 0 < int(m.group(1)) <= len(answers) else m.group(0), d["question"])
+            for d in rec["question_decomposition"]]
+
+
+def hop_support_docs(rec: dict) -> list[str | None]:
+    """Per hop, the document ID of the paragraph that answers it (None if not given)."""
+    by_idx = {p.get("idx", i): p for i, p in enumerate(rec["paragraphs"])}
+    out = []
+    for d in rec["question_decomposition"]:
+        p = by_idx.get(d.get("paragraph_support_idx"))
+        out.append(doc_id(p) if p is not None else None)
+    return out
+
+
+def support(selected: list[dict]) -> dict:
+    return {
+        f"musique-{r['id']}": {
+            "support_docs": [doc_id(p) for p in r["paragraphs"] if p.get("is_supporting")],
+            "hop_support_docs": hop_support_docs(r),
+            "subquestions": resolved_subquestions(r),
+            "hop_ids": hop_ids(r),
+        }
+        for r in selected
+    }
+
+
 def write_corpus(selected: list[dict], corpus_dir: Path) -> dict:
     """One .md file per unique (title, text) paragraph. Replaces the directory's .md files."""
     corpus_dir.mkdir(parents=True, exist_ok=True)
@@ -228,12 +282,12 @@ def write_corpus(selected: list[dict], corpus_dir: Path) -> dict:
     for rec in selected:
         for p in rec["paragraphs"]:
             total += 1
-            title, text = p.get("title", ""), p.get("paragraph_text", "")
-            key = hashlib.sha1(f"{title}\n{text}".encode()).hexdigest()[:12]
-            if key in seen:
+            name = doc_id(p)
+            if name in seen:
                 continue
-            seen.add(key)
-            (corpus_dir / f"{_slug(title)}-{key}.md").write_text(f"# {title}\n\n{text}\n")
+            seen.add(name)
+            title, text = p.get("title", ""), p.get("paragraph_text", "")
+            (corpus_dir / f"{name}.md").write_text(f"# {title}\n\n{text}\n")
     return {"paragraphs": total, "unique_paragraphs_written": len(seen)}
 
 
@@ -259,6 +313,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="share of each stratum drawn as clusters sharing a hop (0 = none)")
     ap.add_argument("--cluster-max", type=int, default=3,
                     help="most questions taken per shared hop")
+    ap.add_argument("--exclude", type=Path, nargs="*", default=[],
+                    help="task files whose MuSiQue questions must not be selected")
     args = ap.parse_args(argv)
     if not 0.0 <= args.reuse_share <= 1.0:
         ap.error("--reuse-share must be in [0, 1]")
@@ -268,11 +324,13 @@ def main(argv: list[str] | None = None) -> None:
     src = args.input or fetch_from_mirror()
     have = count_have([p for p in args.have if p.exists()])
     need = {s: args.per_stratum - have[s] for s in ORDER}
+    exclude = {row["id"] for p in args.exclude if p.exists() for row in load(p)}
+    records = drop_excluded(load(src), exclude)
     if args.reuse_share > 0:
-        picked, log = select_reuse(load(src), need, args.seed, args.reuse_share,
-                                   args.cluster_max)
+        picked, log = select_reuse(records, need, args.seed, args.reuse_share, args.cluster_max)
     else:
-        picked, log = select(load(src), need, args.seed)
+        picked, log = select(records, need, args.seed)
+    log["excluded_by_file"] = len(exclude)
     selected = [r for s in ORDER for r in picked[s]]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -291,6 +349,7 @@ def main(argv: list[str] | None = None) -> None:
         **write_corpus(selected, args.corpus_dir),
     )
     Path(f"{args.out}.log.json").write_text(json.dumps(log, indent=2) + "\n")
+    Path(f"{args.out}.support.json").write_text(json.dumps(support(selected), indent=1) + "\n")
 
     for s in ORDER:
         if log["written_by_stratum"][s] < log["needed_by_stratum"][s]:

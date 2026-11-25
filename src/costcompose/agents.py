@@ -47,6 +47,7 @@ class Runtime:
     def _search_text(self, query: str) -> str:
         passages, tokens = self.store.search(query, k=self.cfg.agents.top_k)
         self.trace.aux_cost_usd += self._embed_cost(tokens)
+        self.trace.retrieved.append([p.doc_id for p in passages])
         return "\n\n".join(f"[{p.doc_id}] {p.text}" for p in passages) or "(no documents)"
 
     def call_llm(
@@ -174,6 +175,7 @@ def retrieve_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
     sub = state["subtasks"][state["index"]]
     passages, tokens = rt.store.search(sub, k=rt.cfg.agents.top_k)
     rt.trace.aux_cost_usd += rt._embed_cost(tokens)
+    rt.trace.retrieved.append([p.doc_id for p in passages])
     ptext = "\n\n".join(f"[{p.doc_id}] {p.text}" for p in passages) or "(no documents)"
     user = f"Subtask: {sub}\n\nPassages:\n{ptext}"
     messages = [
