@@ -5,7 +5,7 @@ from costcompose.config import load_config
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = ROOT / "configs"
 SAMPLE_TASKS = ROOT / "data" / "tasks" / "sample.jsonl"
-SAMPLE_CORPUS = ROOT / "data" / "corpus"
+SAMPLE_CORPUS = ROOT / "data" / "corpus" / "sample"
 
 
 def cfg(name: str):

@@ -48,7 +48,7 @@ jobs:
       - run: pip install -e ".[dev,all]"
       - run: pytest
       - run: costcompose validate --tasks data/tasks/sample.jsonl --configs baseline cache_only route_only composed configs/ablations/*.yaml
-      - run: costcompose run --dry-run --engine langgraph --cache-backend redis --tasks data/tasks/sample.jsonl --corpus data/corpus --seeds 0 1 --out /tmp/results
+      - run: costcompose run --dry-run --engine langgraph --cache-backend redis --tasks data/tasks/sample.jsonl --corpus data/corpus/sample --seeds 0 1 --out /tmp/results
         env:
           COSTCOMPOSE_REDIS_URL: redis://localhost:6379/0
       - uses: actions/upload-artifact@v7

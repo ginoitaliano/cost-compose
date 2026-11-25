@@ -13,4 +13,4 @@ RUN useradd --create-home runner && mkdir -p results && chown runner results
 USER runner
 
 ENTRYPOINT ["costcompose"]
-CMD ["run", "--dry-run", "--tasks", "data/tasks/sample.jsonl", "--corpus", "data/corpus", "--seeds", "0", "--out", "results"]
+CMD ["run", "--dry-run", "--tasks", "data/tasks/sample.jsonl", "--corpus", "data/corpus/sample", "--seeds", "0", "--out", "results"]
