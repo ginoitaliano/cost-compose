@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("out", type=Path)
     rep.add_argument("--exclude-tasks", type=Path, nargs="*", default=[],
                      help="task files whose task IDs are left out (sensitivity analysis)")
+    rep.add_argument("--price", action="append", default=[], metavar="MODEL=IN,OUT",
+                     help="reprice a model (USD per million input,output tokens); repeatable")
     rep.add_argument("--name", default=None,
                      help="output file stem (default: summary, or summary.excluded with "
                           "--exclude-tasks)")
@@ -153,8 +155,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "report":
         excl = {json.loads(x)["id"] for p in args.exclude_tasks
                 for x in p.read_text().splitlines() if x.strip()}
-        name = args.name or ("summary.excluded" if excl else "summary")
-        write_report(args.out, excl or None, name)
+        prices = {}
+        for spec in args.price:
+            model, _, vals = spec.rpartition("=")
+            p_in, p_out = (float(x) for x in vals.split(","))
+            prices[model] = (p_in, p_out)
+        default = "summary"
+        if excl:
+            default += ".excluded"
+        if prices:
+            default += ".repriced"
+        name = args.name or default
+        write_report(args.out, excl or None, name, prices or None)
         print((args.out / f"{name}.md").read_text())
         return 0
 

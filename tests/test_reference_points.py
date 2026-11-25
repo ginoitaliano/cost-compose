@@ -83,3 +83,50 @@ def test_iso_success_oracle_never_drops_below_baseline():
 def test_confirmatory_set_is_holm_corrected():
     from costcompose.analysis import _holm
     assert _holm([0.01, 0.04, None, 0.03]) == [0.03, 0.06, None, 0.06]
+
+
+def test_reprice_changes_only_the_named_model():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from helpers import CONFIGS, SAMPLE_CORPUS, SAMPLE_TASKS
+
+    from costcompose.cli import main
+
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        assert main(["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks",
+                     str(SAMPLE_TASKS), "--corpus", str(SAMPLE_CORPUS), "--seeds", "0",
+                     "--out", str(out), "--configs", "baseline", "route_only"]) == 0
+        llama = "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"
+        assert main(["report", str(out), "--price", f"{llama}=1.0,2.0"]) == 0
+        base = json.loads((out / "summary.json").read_text())["configs"]
+        rep = json.loads((out / "summary.repriced.json").read_text())
+        rows = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines()]
+    assert rep["repriced"]["records_not_repriced"] == 0
+    assert rep["configs"]["baseline"]["cost_usd"] == base["baseline"]["cost_usd"]  # no Llama
+    tin = sum(r["tokens_by_model"].get(llama, [0, 0, 0])[0] for r in rows
+              if r["config"] == "route_only")
+    assert tin > 0
+    assert rep["configs"]["route_only"]["cost_usd"]["mean"] > base["route_only"]["cost_usd"]["mean"]
+
+
+def test_tokens_by_model_add_up_to_the_record_without_embeddings():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from helpers import CONFIGS, SAMPLE_CORPUS, SAMPLE_TASKS
+
+    from costcompose.cli import main
+
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        assert main(["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks",
+                     str(SAMPLE_TASKS), "--corpus", str(SAMPLE_CORPUS), "--seeds", "0",
+                     "--out", str(out), "--configs", "route_only"]) == 0
+        rows = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines()]
+    for r in rows:
+        assert sum(v[0] for v in r["tokens_by_model"].values()) == r["prompt_tokens"]
+        assert sum(v[2] for v in r["tokens_by_model"].values()) <= r["cost_usd"] + 1e-12
