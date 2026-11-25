@@ -1,4 +1,4 @@
-.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run run-extended run-reuse report spotcheck docker clean
+.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run-dev run run-extended run-reuse report spotcheck docker clean
 
 install:
 	pip install -e ".[all]"
@@ -49,7 +49,9 @@ CORE_CONFIGS = baseline cache_only route_only composed \
 	configs/ablations/composed_model_aware.yaml \
 	configs/ablations/single_agent_baseline.yaml configs/ablations/single_agent_route.yaml \
 	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
-	configs/ablations/cache_route_guarded.yaml
+	configs/ablations/cache_route_guarded.yaml \
+	configs/ablations/cache_only_structured.yaml configs/ablations/composed_structured.yaml \
+	configs/ablations/cache_route_structured.yaml
 
 # Ablations beyond the paper: individual early stopping, learned routing, composition effect 4,
 # tool-call guard, one cache guard at a time. Every file in configs/ablations/ must be in
@@ -60,7 +62,8 @@ EXTENDED_CONFIGS = configs/ablations/early_stop_only.yaml \
 	configs/ablations/composed_skip_tool_calls.yaml \
 	configs/ablations/cache_only_role_scoped.yaml configs/ablations/cache_only_first_step.yaml \
 	configs/ablations/cache_only_entity_guard.yaml \
-	configs/ablations/cache_only_skip_tool_calls.yaml
+	configs/ablations/cache_only_skip_tool_calls.yaml \
+	configs/ablations/cache_only_structured_keys.yaml
 
 RUN_ARGS = --tasks data/tasks/suite.jsonl --corpus data/corpus --seeds 0 1 2 --out results/full
 
@@ -78,11 +81,20 @@ suite-dev:
 		--out data/tasks/dev.jsonl --corpus-dir data/corpus_dev/musique
 	costcompose validate --tasks data/tasks/dev.jsonl
 
+# Development runs: the base pipeline and the caches, one seed. Read retrieval with
+# scripts/retrieval_check.py pipeline --tasks data/tasks/dev.jsonl --runs results/dev/runs.jsonl
+DEV_CONFIGS = baseline cache_only configs/ablations/cache_only_guarded.yaml \
+	configs/ablations/cache_only_structured.yaml configs/ablations/cache_only_structured_keys.yaml
+run-dev:
+	costcompose -v run --configs $(DEV_CONFIGS) --tasks data/tasks/dev.jsonl \
+		--corpus data/corpus_dev --seeds 0 --out results/dev
+
 # Caching configs on the reuse stream, into their own output directory.
 REUSE_CONFIGS = baseline cache_only route_only composed \
 	configs/ablations/cache_route.yaml configs/ablations/cache_only_pipeline.yaml \
 	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
-	configs/ablations/cache_route_guarded.yaml
+	configs/ablations/cache_route_guarded.yaml configs/ablations/cache_only_structured.yaml \
+	configs/ablations/composed_structured.yaml configs/ablations/cache_route_structured.yaml
 run-reuse:
 	costcompose -v run --configs $(REUSE_CONFIGS) --tasks data/tasks/suite_reuse.jsonl \
 		--corpus data/corpus_reuse --seeds 0 1 2 --out results/full_reuse

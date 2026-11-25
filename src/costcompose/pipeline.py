@@ -35,6 +35,8 @@ class PipelineState(TypedDict, total=False):
     index: int
     outputs: list[str]
     context: str
+    context_docs: list[str]  # document IDs behind ``context`` (structured cache keys)
+    cached_answer: str | None  # set when the subtask cache answered the current subtask
     final: str
 
 
@@ -85,6 +87,7 @@ def run_task(rt: Runtime, task: Task, engine: str = "auto", graph: Any = None) -
     """Run one task and return a flat result record."""
     rt.trace = TaskTrace()
     rt.current_loop = None
+    rt.pending_subtask = None
     init: dict[str, Any] = {"task_id": task.id, "question": task.question}
     error = None
     try:

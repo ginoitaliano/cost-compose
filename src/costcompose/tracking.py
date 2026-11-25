@@ -46,6 +46,9 @@ class TaskTrace:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # tags cache entries
     loops: int = 0  # reasoning loops started; the current one tags cache entries
     retrieved: list = field(default_factory=list)  # doc IDs returned by each search, in order
+    subtask_cache_lookups: int = 0
+    subtask_cache_hits: int = 0
+    subtask_hits_by_origin: Counter = field(default_factory=Counter)
     reasoning_iterations: int = 0
     early_stops: int = 0
     cached_drafts: int = 0  # reasoner drafts served from the cache
@@ -85,6 +88,9 @@ class TaskTrace:
             "entity_guard_refusals": sum(c.guard_refused for c in self.calls),
             # (role, routing score) per request, for the score distribution against rung cutoffs
             "retrieved_doc_ids": [list(ids) for ids in self.retrieved],
+            "subtask_cache_lookups": self.subtask_cache_lookups,
+            "subtask_cache_hits": self.subtask_cache_hits,
+            "subtask_hits_by_origin": dict(self.subtask_hits_by_origin),
             "routing_scores": [[c.role or c.agent, round(c.complexity_score, 4)]
                                for c in self.calls],
             "cross_model_hits": sum(c.cross_model_hit for c in hits),

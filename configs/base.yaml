@@ -22,6 +22,8 @@ caching:
   role_scoped: false               # true = one namespace per role (planner, aggregator, ...)
   first_step_only: false           # true = cache only the first step of each reasoning loop
   entity_guard: false              # true = refuse a hit whose request IDs/numbers/dates differ
+  key: text                        # text (embed whole input) | structured (embed the ask, exact deps)
+  subtask_cache: false             # true = cache resolved subtask answers; a hit skips the subtask
   backend: redis                   # redis | memory
   redis_url: redis://localhost:6379/0
 

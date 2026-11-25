@@ -31,6 +31,8 @@
 | Guarded cache (role namespaces, first loop step only, entity guard, no tool-call caching) | `caching.role_scoped`, `caching.first_step_only`, `caching.entity_guard`, `caching.skip_tool_calls`; `configs/ablations/*_guarded.yaml` and `cache_only_{role_scoped,first_step,entity_guard,skip_tool_calls}.yaml` |
 | Hit mechanisms (same loop, same task, cross task, cross role) | `Runtime._hit_origin`, `cache_correctness.mechanisms` in `analysis.py` |
 | H1 with the guarded cache | `hypotheses.H1_guarded_cache` |
+| Structured cache keys and subtask cache | `caching.key`, `caching.subtask_cache`; `cache.dependency_key`, `Runtime.subtask_lookup`; `configs/ablations/*_structured*.yaml` |
+| H1 with the structured cache | `hypotheses.H1_structured_cache` |
 | Routing score distribution | `routing_scores` per record, `analysis._routing_scores` |
 | Paired statistics (McNemar, paired bootstrap) | `analysis.compare` |
 | Primary (unit-tolerant) and strict scores, both reported | `evaluation.py`, "Scoring: primary vs strict" in the report |

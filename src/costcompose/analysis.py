@@ -210,6 +210,27 @@ def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "task_success_with_any_hit": _rate(sum(r["success"] for r in with_hit), len(with_hit)),
         "task_success_with_no_hit": _rate(sum(r["success"] for r in without), len(without)),
         "mechanisms": _hit_mechanisms(rows, hits, lookups),
+        "subtask_cache": _subtask_cache(rows),
+    }
+
+
+def _subtask_cache(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Resolved-subtask cache: lookups, hits by origin, and task success with vs without a hit."""
+    if not any(r.get("subtask_cache_lookups") for r in rows):
+        return None
+    lookups = sum(r["subtask_cache_lookups"] for r in rows)
+    hits = sum(r["subtask_cache_hits"] for r in rows)
+    by_origin: Counter = Counter()
+    for r in rows:
+        by_origin.update(r.get("subtask_hits_by_origin", {}))
+    with_hit = [r for r in rows if r["subtask_cache_hits"] > 0]
+    without = [r for r in rows if r["subtask_cache_hits"] == 0]
+    return {
+        "hit_rate": _rate(hits, lookups),
+        "share_of_hits": {o: _rate(by_origin[o], hits) for o in ORIGINS},
+        "task_success_with_subtask_hit": _rate(sum(r["success"] for r in with_hit),
+                                               len(with_hit)),
+        "task_success_without": _rate(sum(r["success"] for r in without), len(without)),
     }
 
 
@@ -416,7 +437,19 @@ PARENTS = {
     "cache_only_first_step": "cache_only",
     "cache_only_entity_guard": "cache_only",
     "cache_only_skip_tool_calls": "cache_only",
+    "cache_only_structured": "cache_only",
+    "cache_route_structured": "cache_route",
+    "composed_structured": "composed",
+    "cache_only_structured_keys": "cache_only",
 }
+
+# Further pairs worth a paired test: the proposed cache against the guarded one, and its parts.
+EXTRA_PAIRS = [
+    ("cache_only_guarded", "cache_only_structured"),
+    ("cache_route_guarded", "cache_route_structured"),
+    ("composed_guarded", "composed_structured"),
+    ("cache_only_structured_keys", "cache_only_structured"),
+]
 
 
 def _mcnemar_exact(ref: list[bool], cfg: list[bool]) -> dict[str, Any]:
@@ -489,6 +522,7 @@ def compare(records: list[dict[str, Any]], ref: str, cfg: str) -> dict[str, Any]
 def _comparisons(configs: dict[str, Any], records: list[dict[str, Any]]) -> list[dict]:
     pairs = [("baseline", c) for c in configs if c != "baseline" and "baseline" in configs]
     pairs += [(p, c) for c, p in PARENTS.items() if c in configs and p in configs]
+    pairs += [(p, c) for p, c in EXTRA_PAIRS if c in configs and p in configs]
     return [x for x in (compare(records, a, b) for a, b in pairs) if x is not None]
 
 
@@ -585,6 +619,11 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
         h1g = _h1_test(records, "cache_route_guarded", cache="cache_only_guarded")
         if h1g is not None:
             out["H1_guarded_cache"] = h1g
+    if all(c in configs for c in ("baseline", "cache_only_structured", "route_only",
+                                  "cache_route_structured")):
+        h1s = _h1_test(records, "cache_route_structured", cache="cache_only_structured")
+        if h1s is not None:
+            out["H1_structured_cache"] = h1s
     if "cache_only" in configs and "cache_only_pipeline" in configs:
         agent_cc = configs["cache_only"]["cache_correctness"] or {}
         pipe_cc = configs["cache_only_pipeline"]["cache_correctness"] or {}
@@ -703,6 +742,28 @@ def _mechanism_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
         sg = cfgs[c]["cache_correctness"]["mechanisms"]["success_given_hit"]
         lines.append(f"| {c} | {_r(sg['same_loop'])} | {_r(sg['same_task'])} "
                      f"| {_r(sg['cross_task'])} |")
+    return lines
+
+
+def _subtask_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
+    rows = [c for c in order
+            if (cfgs[c].get("cache_correctness") or {}).get("subtask_cache")]
+    if not rows:
+        return []
+    lines = [
+        "", "## Subtask cache", "",
+        "Resolved subtask answers reused across subtasks. A hit skips the subtask's retrieval and "
+        "reasoning. n is subtask lookups for the hit rate, hits for the origin shares, and task "
+        "runs for the success columns.", "",
+        "| Config | Hit rate | Same task | Cross task | Task success, any subtask hit "
+        "| Task success, none |", "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in rows:
+        sc = cfgs[c]["cache_correctness"]["subtask_cache"]
+        o = sc["share_of_hits"]
+        lines.append(f"| {c} | {_r(sc['hit_rate'])} | {_r(o['same_task'])} "
+                     f"| {_r(o['cross_task'])} | {_r(sc['task_success_with_subtask_hit'])} "
+                     f"| {_r(sc['task_success_without'])} |")
     return lines
 
 
@@ -907,10 +968,13 @@ def to_markdown(summary: dict[str, Any]) -> str:
     lines += _h1_markdown(hyp.get("H1_sub_additive"))
     lines += _h1_markdown(hyp.get("H1_guarded_cache"),
                           "H1 with the guarded cache: composition once false hits are removed")
+    lines += _h1_markdown(hyp.get("H1_structured_cache"),
+                          "H1 with the structured cache")
     lines += _h3_markdown(hyp.get("H3_routing_success_drop"))
     lines += _e4_markdown(hyp.get("E4_cache_induced_early_stops"))
     lines += _cache_markdown(cfgs, order)
     lines += _mechanism_markdown(cfgs, order)
+    lines += _subtask_markdown(cfgs, order)
     lines += _routing_scores_markdown(cfgs, order)
     lines += [
         "", "## Per-config descriptives", "",

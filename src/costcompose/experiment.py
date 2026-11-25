@@ -44,7 +44,8 @@ def make_cache(
     cache = SemanticCache(backend, embedder, c.threshold, c.scope, c.model_aware,
                           skip_tool_calls=c.skip_tool_calls,
                           version_key=resolve_version_key(c.version_key),
-                          role_scoped=c.role_scoped, entity_guard=c.entity_guard)
+                          role_scoped=c.role_scoped, entity_guard=c.entity_guard,
+                          structured=c.key == "structured")
     cache.reset()  # every (config, seed) run starts cold
     return cache
 

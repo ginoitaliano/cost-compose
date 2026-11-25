@@ -44,11 +44,17 @@ Every LLM request from every node goes through one choke point (`Runtime.call_ll
 | `composed_skip_tool_calls` | `composed` | `caching.skip_tool_calls: true` | savings from replayed action calls |
 | `cache_only_guarded` | `cache_only` | all four cache guards on | false hits removed, caching alone |
 | `composed_guarded` | `composed` | all four cache guards on | composition with the guarded cache |
-| `cache_route_guarded` | `cache_route` | all four cache guards on | H1 with the guarded cache |
+| `cache_route_guarded` | `cache_route` | all four cache guards on | Subtask cache | Resolved subtask answers served across subtasks and tasks; a hit skips retrieval and reasoning | `configs.<name>.cache_correctness.subtask_cache`, "Subtask cache" in `summary.md` |
+| H1 with the structured cache | The H1 test with `cache_only_structured` and `cache_route_structured` | `hypotheses.H1_structured_cache` |
+| H1 with the guarded cache |
 | `cache_only_role_scoped` | `cache_only` | `caching.role_scoped: true` | cross-role hits (plan served as the answer) |
 | `cache_only_first_step` | `cache_only` | `caching.first_step_only: true` | hits replayed into the loop that wrote them |
 | `cache_only_entity_guard` | `cache_only` | `caching.entity_guard: true` | hits for a different ID, number or date |
 | `cache_only_skip_tool_calls` | `cache_only` | `caching.skip_tool_calls: true` | replayed tool calls, caching alone |
+| `cache_only_structured` | `cache_only` | `caching.key: structured`, `caching.subtask_cache: true` | the proposed cache, caching alone |
+| `composed_structured` | `composed` | same | composition with the proposed cache |
+| `cache_route_structured` | `cache_route` | same | H1 with the proposed cache |
+| `cache_only_structured_keys` | `cache_only` | `caching.key: structured` only | structured keys without the subtask cache |
 | `single_agent_baseline` | `base` | `mode: single_agent` | H3 single-agent arm, no techniques |
 | `single_agent_route` | `single_agent_baseline` | routing on | H3 single-agent routing drop |
 | `learned_route` | `route_only` | `routing.policy: linucb` | learned vs heuristic routing |
@@ -141,6 +147,7 @@ make run-reuse      # -> results/full_reuse/
 
 # Development set for method work (MuSiQue, disjoint from both suites, 20 per stratum)
 make suite-dev      # data/tasks/dev.jsonl, corpus in data/corpus_dev/
+make run-dev        # baseline and the caches on the development set, seed 0 -> results/dev/
 ```
 
 GAIA tasks come from the validation split only, because it is the only split with public answers. `prepare_gaia.py` excludes tasks the pipeline cannot attempt. Its tools are a calculator and search over the local corpus, so it drops tasks that need web browsing, tasks with an attached file it cannot read (any attachment by default; `--readable-extensions` allows some), and tasks that need multimodal input. The decision uses GAIA's metadata: the `file_name` field and the annotators' tool list, plus URLs or YouTube links in the question. Exclusion counts by reason are printed and written to `<out>.exclusions.json`, which holds counts only, no task content. Tasks with no annotator tool list are kept and counted so they can be reviewed by hand. If fewer eligible tasks remain than requested, the script warns rather than padding. In practice only 18 of the 165 validation tasks qualify (8 low, 6 medium, 4 high): 123 need web browsing, 41 need multimodal input and 25 have attachments (a task can have several reasons).
@@ -189,6 +196,8 @@ Settings added in this version. Each defaults to the paper setup, so existing co
 | `caching.version_key` | `null` | Added to the cache namespace in both scopes, so a change invalidates earlier entries. `prompts` hashes the system prompts, `file:<path>` hashes a file, any other value is used as given. |
 | `caching.role_scoped` | `false` | `true`: one cache namespace per role rather than per agent. The orchestrator plans and aggregates; without this an aggregation request can be served the stored plan. In `pipeline` scope it splits the shared namespace by role. |
 | `caching.first_step_only` | `false` | `true`: only the first step of each reasoning loop looks up or writes the cache. Later steps differ from earlier ones only by a tool result or a refinement request appended to a long input, so without this a step can be served the response its own loop produced one step earlier. |
+| `caching.key` | `text` | `structured`: embed only what the request asks (the question or subtask) and require an exact match on what its answer depends on: the role, the retrieved document IDs, the upstream answers, the reasoning loop's history so far, and the IDs, numbers and dates in the ask. |
+| `caching.subtask_cache` | `false` | `true`: cache each subtask's resolved answer under its text (semantic) and the earlier answers and entities it depends on (exact). A hit skips the subtask's retrieval and reasoning. `multi_agent` mode only. |
 | `caching.entity_guard` | `false` | `true`: a hit is refused, and the model called, when the IDs, numbers or dates in the request's question or subtask differ from those of the stored request. Retrieved passages are not compared. |
 | `early_stopping.exclude_cached_drafts` | `false` | `true`: drafts served from the cache are left out of the stop rule (both the self-reported confidence and the consistency term). |
 
@@ -245,6 +254,8 @@ Documents are chunked at about 800 characters on blank lines, and a heading is a
 Routing features use a 4-characters-per-token estimate. Billing uses the token counts the provider returns.
 
 The guarded cache. With all guards off, the cache is wired the way semantic caches are usually dropped into agent frameworks: each agent's input is the key and every request is cached. In a pilot run (12 tasks) that produced three kinds of false hit inside a single task: the aggregator served the orchestrator's own plan as the final answer, reasoning-loop steps served their own previous tool call back (one task ran the calculator 100 times), and hits for questions with different IDs, numbers or dates. The four guards each follow a practice from deployed semantic caches, adapted to a pipeline: partitioning the cache by role, as production caches partition by application, user or intent; caching only the first turn of a multi-turn exchange and never function-call turns, as Redis's integration for Google ADK does; and refusing hits whose numbers or identifiers differ, as condition checks in recent semantic-cache work do. None needs an LLM verifier or changes the 0.92 threshold. Both caches are run: the unguarded one is the default and the naive arm, the guarded one is a separate set of configurations, and one-guard ablations attribute the change to each guard.
+
+The structured cache. The guards remove false hits but keep the cause: a text key embeds the agent's whole input, in which what is asked (a subtask line) is short and the shared context (the task, passages, earlier results) is long. Two different subtasks of one task then look alike, and the same subtask in two tasks looks different. In the reuse pilot, the guarded cache still served one subtask's answer to another subtask of the same task, and each of those tasks failed. `caching.key: structured` splits the key: what is asked is embedded and matched by meaning, and what the answer depends on is matched exactly, as a digest in the namespace. It follows two lines of work: condition checks on reused answers (SafeCache) and exact keys for agent plans (Agentic Plan Caching). Here they are applied at the level of one request in a pipeline. `caching.subtask_cache` adds a cache of resolved subtask answers: in multi-hop work the reusable unit is a resolved fact ("The Collegian is owned by Houston Baptist University"), and decomposition exposes it as a subtask that a cache keyed on whole questions never sees. Its dependency digest holds the earlier answers in the task, so a later hop is reused only when the hops before it resolved the same way. These two are developed on the development set only.
 
 Semantic caching inside the reasoning loop can replay an earlier draft to a refinement step. By default that is counted, not suppressed: it is one of the composition effects the study is looking for (`cache_induced_early_stops`). `early_stopping.exclude_cached_drafts: true` suppresses it for the ablation.
 

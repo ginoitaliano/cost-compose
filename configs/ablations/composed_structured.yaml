@@ -1,0 +1,4 @@
+# composed with the structured cache.
+extends: ../composed.yaml
+name: composed_structured
+caching: {key: structured, subtask_cache: true}
