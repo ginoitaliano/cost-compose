@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -85,6 +86,12 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(message)s")
+    # -v is for the run's own progress. LiteLLM and httpx log every request at INFO through the
+    # root logger; keep them at LITELLM_LOG (default WARNING) so -v does not print each call.
+    third_party = getattr(logging, os.environ.get("LITELLM_LOG", "WARNING").upper(),
+                          logging.WARNING)
+    for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "httpx"):
+        logging.getLogger(name).setLevel(third_party)
 
     if args.cmd == "validate":
         for p in _resolve_configs(args.configs, args.config_dir):
