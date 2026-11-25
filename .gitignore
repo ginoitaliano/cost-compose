@@ -14,5 +14,10 @@ results/*
 !results/.gitkeep
 # GAIA asks that its data not be republished in crawlable form
 data/tasks/gaia*.jsonl
+# Built from MuSiQue at setup time (CC BY 4.0); fetched, not committed
+data/tasks/musique*.jsonl
+data/tasks/musique*.json
+data/corpus/musique/
+data/tasks/suite.jsonl
 .DS_Store
 .ipynb_checkpoints/

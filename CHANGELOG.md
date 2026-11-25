@@ -4,6 +4,7 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- Task suite: `scripts/prepare_musique.py` and `make suite`. GAIA leaves only 18 eligible tasks (123 of 165 need browsing), so MuSiQue (dev split, MuSiQue-Ans) fills each stratum to 40, stratified by hop count, with a shared paragraph corpus and a log carrying the input SHA-256. Tasks accept an optional `aliases` list; both scores accept any listed answer.
 - `costcompose judge`: optional audit of the scorer by an LLM judge that must not be on the routing ladder; judges the runs where primary and strict disagree (and optionally the spot-check sample), and reports agreement with both scores. Never changes `runs.jsonl`. `LiteLLMClient` accepts an optional `api_base`.
 - Scoring: every record has `success` (primary: quasi-exact match that also accepts trailing unit words the question names) and `success_strict` (GAIA-style quasi-exact match). The report adds a primary-vs-strict section with paired tests under both. The aggregator and single-agent prompts now ask for the bare number even when the question names a unit. The spot-check CSV carries both automated verdicts.
 - Bottom routing rung is now Llama-3.1-8B-Instruct (`meta-llama/Llama-3.1-8B-Instruct`), replacing Llama-3-8B-Instruct; same size, same placeholder price. `serve_llama.sh` binds to 127.0.0.1 and one GPU by default.

@@ -97,8 +97,11 @@ def run_task(rt: Runtime, task: Task, engine: str = "auto", graph: Any = None) -
     except Exception as exc:  # one failed task must not kill a multi-hour run
         final, error = "", f"{type(exc).__name__}: {exc}"
     latency = rt.trace.elapsed()
-    success_strict = bool(final) and score(final, task.answer)
-    success = bool(final) and score_lenient(final, task.answer, task.question)  # primary
+    # Any listed answer counts: the reference answer or one of its aliases.
+    success_strict = bool(final) and any(score(final, a) for a in task.answers)
+    success = bool(final) and any(  # primary
+        score_lenient(final, a, task.question) for a in task.answers
+    )
     updates = rt.router.end_task(success)  # learned routers update here; heuristic is a no-op
     return {
         "task_id": task.id,

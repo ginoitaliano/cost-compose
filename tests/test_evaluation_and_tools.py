@@ -98,3 +98,19 @@ def test_lenient_matches_strict_on_text_answers():
     assert score_lenient("FINAL ANSWER: The Premium plan.", "premium plan", "Which plan?")
     assert not score_lenient("FINAL ANSWER: Premium plan USD", "premium plan", "in USD?")
     assert score_lenient("FINAL ANSWER: 3 USD, 4 USD", "3, 4", "Both prices in USD?")
+
+
+def test_aliases_count_for_both_scores(tmp_path):
+    from costcompose.tasks import load_tasks
+
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"id": "m1", "question": "Who founded the company?",
+                             "answer": "William Henry Gates III", "complexity": "low",
+                             "aliases": ["Bill Gates", "Gates"]}) + "\n")
+    t = load_tasks(p)[0]
+    assert t.answers == ("William Henry Gates III", "Bill Gates", "Gates")
+    out = "FINAL ANSWER: Bill Gates"
+    assert any(score(out, a) for a in t.answers)
+    assert any(score_lenient(out, a, t.question) for a in t.answers)
+    assert not any(score("FINAL ANSWER: Paul Allen", a) for a in t.answers)
+    assert load_tasks(SAMPLE_TASKS)[0].aliases == ()
