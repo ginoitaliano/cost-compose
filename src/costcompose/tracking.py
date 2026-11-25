@@ -36,6 +36,17 @@ class CallRecord:
     cross_role_hit: bool = False  # hit served from an entry written by another role
     query_entity_mismatch: bool = False  # hit whose query-text entities differ
     guard_refused: bool = False  # a hit the entity guard refused (served by the model instead)
+    model_cost_usd: float = 0.0  # the provider call alone, without cache-lookup embeddings
+
+
+def _by_model(calls: list[CallRecord]) -> dict[str, list[float]]:
+    out: dict[str, list[float]] = {}
+    for c in calls:
+        row = out.setdefault(c.model, [0, 0, 0.0])
+        row[0] += c.prompt_tokens
+        row[1] += c.completion_tokens
+        row[2] += c.model_cost_usd
+    return out
 
 
 @dataclass
@@ -101,6 +112,8 @@ class TaskTrace:
             "cache_hits_by_agent": dict(by_agent_hits),
             "requests_by_agent": dict(by_agent_lookups),
             "routing": dict(Counter(c.model for c in self.calls)),
+            # per model: [prompt tokens, completion tokens, USD] of provider calls, for repricing
+            "tokens_by_model": _by_model(llm_calls),
             "routing_tiers": dict(Counter(c.tier for c in self.calls)),
             "reasoning_iterations": self.reasoning_iterations,
             "early_stops": self.early_stops,
