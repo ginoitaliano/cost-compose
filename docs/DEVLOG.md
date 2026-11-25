@@ -76,6 +76,16 @@ These pilot tasks came from the evaluation suite. Of its 18 GAIA tasks, 8 were s
   requests; runs before and after are not comparable); single-model reference configs and the
   oracle bound.
 
+## 2026-11-25. Development run 2 (after the prompt change): serving limit
+
+- Seen: 3 of 60 `llama_only` task runs failed with ContextWindowExceededError. The vLLM server
+  was started with `--max-model-len 8192`, a serving choice, while Llama 3.1 supports 131,072
+  tokens and every other model on the ladder accepts 128k or more.
+- Changed: `serve_llama.sh` serves Llama 3.1 at its native 131,072 tokens and uses vLLM's
+  default generation config (`--generation-config vllm`) rather than the model repository's
+  sampling defaults, so the request's temperature and seed apply as for the API models. The
+  failed runs are retried on resume.
+
 ## Next
 
 - Measure the noise floor: baseline on the development set with a second seed.

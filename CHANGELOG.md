@@ -4,6 +4,7 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- `serve_llama.sh`: Llama 3.1 at its native 131,072-token context (`MAX_MODEL_LEN`), was 8,192, which failed 3 of 60 Llama-only development runs; `--generation-config vllm`.
 - Seed-averaged oracle bound next to the per-run one; routed configs are placed against it. `docs/DEVLOG.md`: every post-data change, what prompted it, and what it changed.
 - Answer F1 (MuSiQue's official metric) on every record; mean F1 per config and paired F1 differences in the report.
 - Prompts: reasoner, aggregator and single agent give a best answer instead of "unknown" and the answer rather than a sentence. This changes every configuration's requests; earlier runs are not comparable.
