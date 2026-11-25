@@ -190,22 +190,53 @@ def run_experiment(
     return write_report(out)
 
 
+def reprice(records: list[dict[str, Any]], prices: dict[str, tuple[float, float]]) -> int:
+    """Recompute cost_usd with other per-million-token prices for some models, in place.
+
+    Uses each record's tokens_by_model. Returns how many records could not be repriced
+    (written before per-model tokens were recorded) and are left unchanged.
+    """
+    skipped = 0
+    for r in records:
+        by_model = r.get("tokens_by_model")
+        if by_model is None:
+            skipped += 1
+            continue
+        for model, (p_in, p_out) in prices.items():
+            if model in by_model:
+                tin, tout, usd = by_model[model]
+                new = (tin * p_in + tout * p_out) / 1_000_000
+                r["cost_usd"] += new - usd
+                by_model[model] = [tin, tout, new]
+    return skipped
+
+
 def write_report(
-    out_dir: str | Path, exclude_tasks: set[str] | None = None, name: str = "summary"
+    out_dir: str | Path, exclude_tasks: set[str] | None = None, name: str = "summary",
+    prices: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
-    """Write <name>.json and <name>.md from runs.jsonl, optionally leaving some tasks out
-    (for example tasks seen in pilots, as a sensitivity analysis)."""
+    """Write <name>.json and <name>.md from runs.jsonl, optionally leaving some tasks out (for
+    example tasks seen in pilots) or repricing some models (price sensitivity)."""
     out = Path(out_dir)
     records = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines() if x.strip()]
     if exclude_tasks:
         records = [r for r in records if r["task_id"] not in exclude_tasks]
+    skipped = reprice(records, prices) if prices else 0
     summary = analysis.summarize(records)
     if exclude_tasks:
         summary["excluded_tasks"] = sorted(exclude_tasks)
+    if prices:
+        summary["repriced"] = {"prices_per_mtok": {m: list(p) for m, p in prices.items()},
+                               "records_not_repriced": skipped}
     (out / f"{name}.json").write_text(json.dumps(summary, indent=2))
     md = analysis.to_markdown(summary)
     if exclude_tasks:
         md = md.replace("# Results", f"# Results without {len(exclude_tasks)} excluded tasks", 1)
+    if prices:
+        desc = "; ".join(f"{m} at ${a:g} / ${b:g} per million tokens"
+                         for m, (a, b) in prices.items())
+        md = md.replace("\n", f"\n\nRepriced: {desc}. Records without per-model tokens left "
+                        f"unchanged: {skipped}.\n", 1)
     (out / f"{name}.md").write_text(md)
     return summary
 

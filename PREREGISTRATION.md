@@ -56,6 +56,8 @@ Everything in `configs/base.yaml` at the commit that adds this file, including:
   tokens, about $1.08 per million tokens for each dollar of hourly rate. At that utilisation,
   self-hosting costs about as much per token as GPT-4o's input price, which would change every
   saving that relies on Llama.
+  Both are computed from the recorded per-model token counts, without rerunning:
+  `costcompose report results/full --price hosted_vllm/meta-llama/Llama-3.1-8B-Instruct=IN,OUT`.
 
 ## Configurations
 

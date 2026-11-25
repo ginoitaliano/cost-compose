@@ -128,7 +128,7 @@ class Runtime:
             CallRecord(agent, decision.model, decision.tier, decision.score, u.prompt_tokens,
                        u.completion_tokens, cost + emb, ref + emb, False, False, emb_tokens,
                        time.perf_counter() - t0, role=role, cache_lookup=use_cache,
-                       guard_refused=refused)
+                       guard_refused=refused, model_cost_usd=cost)
         )
         return resp
 
