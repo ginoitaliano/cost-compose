@@ -1,0 +1,5 @@
+# One guard at a time: cache_only with first_step_only on (only the first step of each reasoning loop is cached).
+# Compared with cache_only, it attributes the change in false hits to this guard alone.
+extends: ../cache_only.yaml
+name: cache_only_first_step
+caching: {first_step_only: true}

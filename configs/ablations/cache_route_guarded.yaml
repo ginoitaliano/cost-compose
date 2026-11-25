@@ -1,0 +1,5 @@
+# cache_route with the guarded cache. With cache_only_guarded and route_only, this tests H1 a
+# second time: whether the cache x routing interaction survives once false hits are removed.
+extends: cache_route.yaml
+name: cache_route_guarded
+caching: {role_scoped: true, first_step_only: true, entity_guard: true, skip_tool_calls: true}

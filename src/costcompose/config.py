@@ -35,6 +35,10 @@ class CachingConfig:
     # Instruction/context version added to cache namespaces (both scopes). null = unversioned.
     # "prompts" hashes the system prompts; "file:<path>" hashes a file; anything else is literal.
     version_key: str | None = None
+    # Guards for caching inside an agent pipeline (all off = the naive, GPTCache-style cache).
+    role_scoped: bool = False  # True: one namespace per role (planner and aggregator separate)
+    first_step_only: bool = False  # True: only the first step of a reasoning loop is cached
+    entity_guard: bool = False  # True: a hit whose request entities differ is refused
     backend: str = "memory"  # "memory" | "redis"
     redis_url: str = "redis://localhost:6379/0"
 

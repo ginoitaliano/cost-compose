@@ -30,19 +30,24 @@ suite:
 		> data/tasks/suite.jsonl
 	costcompose validate --tasks data/tasks/suite.jsonl
 
-# Configs the paper's Table 1 and hypotheses H1-H3 need.
+# Configs the paper's Table 1 and hypotheses H1-H3 need, plus the guarded-cache arm.
 CORE_CONFIGS = baseline cache_only route_only composed \
 	configs/ablations/cache_route.yaml configs/ablations/cache_only_pipeline.yaml \
 	configs/ablations/composed_model_aware.yaml \
-	configs/ablations/single_agent_baseline.yaml configs/ablations/single_agent_route.yaml
+	configs/ablations/single_agent_baseline.yaml configs/ablations/single_agent_route.yaml \
+	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
+	configs/ablations/cache_route_guarded.yaml
 
 # Ablations beyond the paper: individual early stopping, learned routing, composition effect 4,
-# tool-call guard. Every file in configs/ablations/ must be in exactly one of the two lists
-# (tests/test_config.py checks this).
+# tool-call guard, one cache guard at a time. Every file in configs/ablations/ must be in
+# exactly one of the two lists (tests/test_config.py checks this).
 EXTENDED_CONFIGS = configs/ablations/early_stop_only.yaml \
 	configs/ablations/learned_route.yaml configs/ablations/composed_learned.yaml \
 	configs/ablations/composed_exclude_cached_drafts.yaml \
-	configs/ablations/composed_skip_tool_calls.yaml
+	configs/ablations/composed_skip_tool_calls.yaml \
+	configs/ablations/cache_only_role_scoped.yaml configs/ablations/cache_only_first_step.yaml \
+	configs/ablations/cache_only_entity_guard.yaml \
+	configs/ablations/cache_only_skip_tool_calls.yaml
 
 RUN_ARGS = --tasks data/tasks/suite.jsonl --corpus data/corpus --seeds 0 1 2 --out results/full
 

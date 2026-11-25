@@ -30,7 +30,8 @@ def test_parallel_tool_calls_are_written_one_per_assistant_turn():
         LLMResponse("ANSWER: 26\nCONFIDENCE: 0.9\nSTATUS: FINAL", "gpt-4o", Usage(1, 1)),
     ])
 
-    def call_llm(agent, messages, features, local_input, pipeline_context, use_tools=False):
+    def call_llm(agent, messages, features, local_input, pipeline_context, use_tools=False,
+                 **_):
         seen.append([dict(m) for m in messages])
         rt.trace.calls.append(CallRecord(agent, "gpt-4o", "fixed", 0.0, 0, 0, 0.0, 0.0, False,
                                          False, 0, 0.0))

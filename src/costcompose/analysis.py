@@ -57,14 +57,16 @@ def _ci95(samples: np.ndarray) -> list[float]:
     return [float(lo), float(hi)]
 
 
-def _h1_test(records: list[dict[str, Any]], target: str) -> dict[str, Any] | None:
+def _h1_test(
+    records: list[dict[str, Any]], target: str, cache: str = "cache_only"
+) -> dict[str, Any] | None:
     """H1 against the independence baseline, with a paired bootstrap CI over tasks.
 
     Savings are ratios of total cost over the same tasks: s = 1 - cost(config) / cost(baseline).
     If caching and routing act independently, the composed saving is 1 - (1-s_c)(1-s_r).
     The interaction term is observed minus that prediction.
     """
-    names = ["baseline", "cache_only", "route_only", target]
+    names = ["baseline", cache, "route_only", target]
     tasks, m = _paired_matrix(records, names, "cost_usd")
     if not tasks:
         return None
@@ -88,6 +90,7 @@ def _h1_test(records: list[dict[str, Any]], target: str) -> dict[str, Any] | Non
         verdict = "consistent with independence: CI contains 0"
     return {
         "compared_config": target,
+        "cache_config": cache,
         "n_tasks": len(tasks),
         "saving_cache_only": s_cache,
         "saving_route_only": s_route,
@@ -103,11 +106,11 @@ def _h1_test(records: list[dict[str, Any]], target: str) -> dict[str, Any] | Non
         "secondary_sum_of_savings": {
             "additive_prediction": additive,
             "observed_over_additive": s_obs / additive if additive else None,
-            "note": "secondary: any two positive savings compose below their sum "
-                    "(a + b - ab < a + b), so falling short of the sum is expected "
-                    "without interference",
+            "note": "secondary: two positive savings compose below their sum under "
+                    "independence (a + b - ab < a + b); with a negative saving the independence "
+                    "prediction is above the sum, so the sum is not a test of interference",
         },
-        "note": None if target == "cache_route" else (
+        "note": None if target.startswith("cache_route") else (
             "composed also enables early stopping; add configs/ablations/cache_route.yaml "
             "for a clean cache x routing comparison"
         ),
@@ -127,9 +130,14 @@ SCALARS = (
 )
 
 
+def _lookups(r: dict[str, Any]) -> int:
+    """Cache lookups in a task run. Older records lack the field; every request was a lookup."""
+    return r.get("cache_lookups", r["requests"])
+
+
 def _per_seed(rows: list[dict[str, Any]]) -> dict[str, Any]:
     lat = np.array([r["latency_s"] for r in rows])
-    requests = sum(r["requests"] for r in rows)
+    requests = sum(_lookups(r) for r in rows)
     hits = sum(r["cache_hits"] for r in rows)
     agent_req: Counter = Counter()
     agent_hit: Counter = Counter()
@@ -176,7 +184,7 @@ def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
     Lookup level: of the cache lookups that hit (missed), the share whose task succeeded.
     Task level: success of tasks that had at least one hit vs tasks that had none.
     """
-    lookups = sum(r["requests"] for r in rows)
+    lookups = sum(_lookups(r) for r in rows)
     hits = sum(r["cache_hits"] for r in rows)
     misses = lookups - hits
     known = all("entity_mismatch_hits" in r for r in rows)
@@ -193,7 +201,7 @@ def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "entity_mismatch_hits_by_agent": dict(by_agent) if known else None,
         "success_given_hit": _rate(sum(r["cache_hits"] * r["success"] for r in rows), hits),
         "success_given_miss": _rate(
-            sum((r["requests"] - r["cache_hits"]) * r["success"] for r in rows), misses
+            sum((_lookups(r) - r["cache_hits"]) * r["success"] for r in rows), misses
         ),
         "success_given_entity_mismatch_hit": (
             _rate(sum(r.get("entity_mismatch_hits", 0) * r["success"] for r in rows), mism)
@@ -201,7 +209,66 @@ def _cache_correctness(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "task_success_with_any_hit": _rate(sum(r["success"] for r in with_hit), len(with_hit)),
         "task_success_with_no_hit": _rate(sum(r["success"] for r in without), len(without)),
+        "mechanisms": _hit_mechanisms(rows, hits, lookups),
     }
+
+
+ORIGINS = ("same_loop", "same_task", "cross_task")
+
+
+def _hit_mechanisms(rows: list[dict[str, Any]], hits: int, lookups: int) -> dict[str, Any] | None:
+    """Where served entries came from, and what the guards refused or bypassed.
+
+    same_loop: written earlier by the reasoning loop it is served back into.
+    same_task: written elsewhere in the same task run (another agent, loop or role).
+    cross_task: written while an earlier task ran: the reuse a semantic cache is meant for.
+    Success given a hit of each origin weights each task's success by its hits of that origin.
+    """
+    if not all("hits_by_origin" in r for r in rows):
+        return None  # records written before origin tracking
+    by_origin: Counter = Counter()
+    succ: Counter = Counter()
+    by_role: Counter = Counter()
+    for r in rows:
+        by_origin.update(r["hits_by_origin"])
+        by_role.update(r.get("hits_by_role", {}))
+        for o, k in r["hits_by_origin"].items():
+            succ[o] += k * r["success"]
+    return {
+        "share_of_hits": {o: _rate(by_origin[o], hits) for o in ORIGINS},
+        "success_given_hit": {o: _rate(succ[o], by_origin[o]) for o in ORIGINS},
+        "cross_role_share_of_hits": _rate(sum(r["cross_role_hits"] for r in rows), hits),
+        "query_entity_mismatch_share_of_hits": _rate(
+            sum(r["query_entity_mismatch_hits"] for r in rows), hits
+        ),
+        "entity_guard_refusals": _rate(sum(r["entity_guard_refusals"] for r in rows), lookups),
+        "bypassed_requests": sum(r["cache_bypassed"] for r in rows),
+        "hits_by_role": dict(sorted(by_role.items())),
+    }
+
+
+RUNG_CUTOFFS = (0.25, 0.5, 0.75)  # configs/base.yaml ladder: score below a cutoff stays below
+
+
+def _routing_scores(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Distribution of routing scores per role, against the ladder cutoffs."""
+    if not all("routing_scores" in r for r in rows):
+        return None
+    by_role: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        for role, score in r["routing_scores"]:
+            by_role[role].append(score)
+    out = {}
+    for role, xs in sorted(by_role.items()):
+        a = np.array(xs)
+        out[role] = {
+            "n": len(xs),
+            "median": float(np.median(a)),
+            "p95": float(np.percentile(a, 95)),
+            "max": float(a.max()),
+            "share_at_or_above": {str(c): float((a >= c).mean()) for c in RUNG_CUTOFFS},
+        }
+    return out
 
 
 def _scoring(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -251,7 +318,7 @@ def _sample_sizes(seeds: dict[int, list[dict]], techniques: dict[str, bool]) -> 
     quarters = [len(c) for c in np.array_split(np.arange(len(seeds[first])), 4) if len(c)]
     return {
         "task_runs": len(rows),  # tasks x seeds: denominator of success_rate
-        "cache_lookups": sum(r["requests"] for r in rows) if techniques.get("caching") else 0,
+        "cache_lookups": sum(_lookups(r) for r in rows) if techniques.get("caching") else 0,
         "routed_requests": sum(routed.values()),
         "by_complexity": dict(sorted(Counter(r["complexity"] for r in rows).items())),
         "learning_curve_task_runs": [q * len(seeds) for q in quarters],
@@ -313,6 +380,10 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 _cache_correctness([r for rows in seeds.values() for r in rows])
                 if techniques[name].get("caching") else None
             ),
+            "routing_scores": (
+                _routing_scores([r for rows in seeds.values() for r in rows])
+                if techniques[name].get("routing") else None
+            ),
             "n_tasks": per_seed[0]["n_tasks"],
             "n": _sample_sizes(seeds, techniques[name]),
             "errors": sum(p["errors"] for p in per_seed),
@@ -338,6 +409,13 @@ PARENTS = {
     "composed_exclude_cached_drafts": "composed",
     "composed_skip_tool_calls": "composed",
     "single_agent_route": "single_agent_baseline",
+    "cache_only_guarded": "cache_only",
+    "composed_guarded": "composed",
+    "cache_route_guarded": "cache_route",
+    "cache_only_role_scoped": "cache_only",
+    "cache_only_first_step": "cache_only",
+    "cache_only_entity_guard": "cache_only",
+    "cache_only_skip_tool_calls": "cache_only",
 }
 
 
@@ -501,6 +579,12 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
         h1 = _h1_test(records, target)
         if h1 is not None:
             out["H1_sub_additive"] = h1
+    # H1 again with the guarded cache: does the interaction survive once false hits are removed?
+    if all(c in configs for c in ("baseline", "cache_only_guarded", "route_only",
+                                  "cache_route_guarded")):
+        h1g = _h1_test(records, "cache_route_guarded", cache="cache_only_guarded")
+        if h1g is not None:
+            out["H1_guarded_cache"] = h1g
     if "cache_only" in configs and "cache_only_pipeline" in configs:
         agent_cc = configs["cache_only"]["cache_correctness"] or {}
         pipe_cc = configs["cache_only_pipeline"]["cache_correctness"] or {}
@@ -587,6 +671,65 @@ def _cache_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
     return lines
 
 
+def _mechanism_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
+    rows = [c for c in order
+            if (cfgs[c].get("cache_correctness") or {}).get("mechanisms")]
+    if not rows:
+        return []
+    lines = [
+        "", "## Cache hits by mechanism", "",
+        "Where each served entry was written. Same loop: earlier in the reasoning loop it is "
+        "served back into. Same task: elsewhere in the same task run. Cross task: during an "
+        "earlier task, the reuse a semantic cache is meant for. Cross role: written by another "
+        "role (for example a plan served to the aggregator). Query-entity mismatch compares "
+        "entities in the question or subtask only. Shares are of hits (n = hits); refusals are "
+        "of lookups; bypassed requests skipped the cache under `first_step_only`.", "",
+        "| Config | Same loop | Same task | Cross task | Cross role | Query-entity mismatch "
+        "| Guard refusals | Bypassed |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in rows:
+        m = cfgs[c]["cache_correctness"]["mechanisms"]
+        o = m["share_of_hits"]
+        lines.append(
+            f"| {c} | {_r(o['same_loop'])} | {_r(o['same_task'])} | {_r(o['cross_task'])} "
+            f"| {_r(m['cross_role_share_of_hits'])} "
+            f"| {_r(m['query_entity_mismatch_share_of_hits'])} "
+            f"| {_r(m['entity_guard_refusals'])} | {m['bypassed_requests']} |"
+        )
+    lines += ["", "Success given a hit, by origin (n = hits of that origin).", "",
+              "| Config | Same loop | Same task | Cross task |", "| --- | --- | --- | --- |"]
+    for c in rows:
+        sg = cfgs[c]["cache_correctness"]["mechanisms"]["success_given_hit"]
+        lines.append(f"| {c} | {_r(sg['same_loop'])} | {_r(sg['same_task'])} "
+                     f"| {_r(sg['cross_task'])} |")
+    return lines
+
+
+def _routing_scores_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
+    rows = [c for c in order if cfgs[c].get("routing_scores")]
+    if not rows:
+        return []
+    cut = ", ".join(str(c) for c in RUNG_CUTOFFS)
+    lines = [
+        "", "## Routing scores", "",
+        f"Complexity score per request by role, against the ladder cutoffs ({cut}). A request "
+        "goes to the first rung whose cutoff its score is below; the top rung needs a score of "
+        "at least the last cutoff. n is requests.", "",
+        "| Config | Role | n | Median | P95 | Max | >= 0.25 | >= 0.5 | >= 0.75 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in rows:
+        for role, d in cfgs[c]["routing_scores"].items():
+            sh = d["share_at_or_above"]
+            lines.append(
+                f"| {c} | {role} | {d['n']} | {d['median']:.3f} | {d['p95']:.3f} "
+                f"| {d['max']:.3f} | " + " | ".join(f"{100 * sh[str(k)]:.1f}%"
+                                                     for k in RUNG_CUTOFFS) + " |"
+            )
+    return lines
+
+
 def _e4_markdown(e4: dict[str, Any] | None) -> list[str]:
     if not e4:
         return []
@@ -610,16 +753,18 @@ def _e4_markdown(e4: dict[str, Any] | None) -> list[str]:
     return lines
 
 
-def _h1_markdown(h1: dict[str, Any] | None) -> list[str]:
+def _h1_markdown(h1: dict[str, Any] | None, title: str = "H1: composition of caching and routing"
+                 ) -> list[str]:
     if not h1:
         return []
     p, s = h1["primary_independence_test"], h1["secondary_sum_of_savings"]
+    cache = h1.get("cache_config", "cache_only")
     lines = [
-        "", "## H1: composition of caching and routing", "",
+        "", f"## {title}", "",
         f"Compared config: `{h1['compared_config']}`, n = {h1['n_tasks']} tasks "
         f"(paired, all seeds per task). Savings are relative to `baseline` cost.", "",
         "| Quantity | Value |", "| --- | --- |",
-        f"| Saving, cache_only | {100 * h1['saving_cache_only']:.1f}% |",
+        f"| Saving, {cache} | {100 * h1['saving_cache_only']:.1f}% |",
         f"| Saving, route_only | {100 * h1['saving_route_only']:.1f}% |",
         f"| Saving, {h1['compared_config']} (observed) | {100 * h1['observed_saving']:.1f}% "
         f"95% CI {_pct_ci(h1['observed_saving_ci95'])} |",
@@ -630,7 +775,8 @@ def _h1_markdown(h1: dict[str, Any] | None) -> list[str]:
         f"| Secondary: sum of savings s_cache + s_route | {100 * s['additive_prediction']:.1f}% |",
         "",
         f"Primary test: {p['verdict']}.",
-        "The sum of savings is secondary: two positive savings always compose below their sum.",
+        "The sum of savings is secondary: two positive savings compose below their sum even "
+        "when independent, and with a negative saving the sum says nothing about interference.",
     ]
     if h1.get("note"):
         lines += ["", f"Note: {h1['note']}."]
@@ -759,9 +905,13 @@ def to_markdown(summary: dict[str, Any]) -> str:
     lines += _comparisons_markdown(summary.get("comparisons", []))
     lines += _scoring_markdown(cfgs, order, summary.get("comparisons", []))
     lines += _h1_markdown(hyp.get("H1_sub_additive"))
+    lines += _h1_markdown(hyp.get("H1_guarded_cache"),
+                          "H1 with the guarded cache: composition once false hits are removed")
     lines += _h3_markdown(hyp.get("H3_routing_success_drop"))
     lines += _e4_markdown(hyp.get("E4_cache_induced_early_stops"))
     lines += _cache_markdown(cfgs, order)
+    lines += _mechanism_markdown(cfgs, order)
+    lines += _routing_scores_markdown(cfgs, order)
     lines += [
         "", "## Per-config descriptives", "",
         "Mean ± std across seeds. Cost is USD per task at each model's own price. n is task runs "

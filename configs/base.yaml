@@ -19,6 +19,9 @@ caching:
   model_aware: false               # false = a cached answer can serve a different routed model
   skip_tool_calls: false           # true = never cache outputs with tool-call arguments
   version_key: null                # instruction version in cache keys: null | prompts | file:<path> | <string>
+  role_scoped: false               # true = one namespace per role (planner, aggregator, ...)
+  first_step_only: false           # true = cache only the first step of each reasoning loop
+  entity_guard: false              # true = refuse a hit whose request IDs/numbers/dates differ
   backend: redis                   # redis | memory
   redis_url: redis://localhost:6379/0
 

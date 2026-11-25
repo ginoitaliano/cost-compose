@@ -1,0 +1,6 @@
+# cache_only with every pipeline guard on: one namespace per role, only the first step of each
+# reasoning loop cached, hits refused when the question's IDs, numbers or dates differ, and no
+# tool-call responses cached. Compare with cache_only (the naive, GPTCache-style cache).
+extends: ../cache_only.yaml
+name: cache_only_guarded
+caching: {role_scoped: true, first_step_only: true, entity_guard: true, skip_tool_calls: true}

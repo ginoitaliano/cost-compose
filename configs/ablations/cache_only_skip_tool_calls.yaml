@@ -1,0 +1,5 @@
+# One guard at a time: cache_only with skip_tool_calls on (tool-call responses are never cached).
+# Compared with cache_only, it attributes the change in false hits to this guard alone.
+extends: ../cache_only.yaml
+name: cache_only_skip_tool_calls
+caching: {skip_tool_calls: true}

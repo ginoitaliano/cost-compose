@@ -84,6 +84,7 @@ def build_langgraph(rt: Runtime):
 def run_task(rt: Runtime, task: Task, engine: str = "auto", graph: Any = None) -> dict[str, Any]:
     """Run one task and return a flat result record."""
     rt.trace = TaskTrace()
+    rt.current_loop = None
     init: dict[str, Any] = {"task_id": task.id, "question": task.question}
     error = None
     try:

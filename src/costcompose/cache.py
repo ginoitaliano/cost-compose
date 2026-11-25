@@ -27,6 +27,26 @@ text are still cached.
 namespace in both scopes, so entries written under other instructions are never matched. It goes
 in the namespace rather than the embedded text because a hash appended to the text moves cosine
 similarity only slightly and would not guarantee a miss.
+
+Guards for caching inside an agent pipeline. With all of them off the cache behaves like a
+GPTCache-style cache wired to each agent's input, which is how semantic caches are usually
+dropped into agent frameworks; that is the naive arm of the study. Each guard follows a
+practice from deployed semantic caches, adapted to a multi-agent pipeline:
+
+* ``role_scoped``: one namespace per role, not per agent. The orchestrator plans and
+  aggregates; without this, an aggregation request can be served the stored plan.
+* ``first_step_only`` (enforced by the runtime, which knows loop positions): only the first
+  step of a reasoning loop is looked up or stored. Later steps differ from earlier ones by a
+  tool result or a refinement request, a small change to a long input, so without this a step
+  can be served the response its own loop produced one step earlier.
+* ``entity_guard``: a hit is refused when the entities (IDs, numbers, dates) of the request's
+  query text differ from those of the stored request. The query text is the question or
+  subtask, not the retrieved passages, whose entities differ almost every time.
+* ``skip_tool_calls`` (above).
+
+Every entry records where it was written (task run, reasoning loop, role) so the runtime can
+classify each hit: served back into the same loop, from elsewhere in the same task, or from an
+earlier task; and whether it crossed roles or models.
 """
 
 from __future__ import annotations
@@ -118,6 +138,8 @@ class CacheHit:
     similarity: float
     source_model: str
     entity_mismatch: bool = False  # served entry came from a request with different entities
+    query_entity_mismatch: bool = False  # ...judged on the query text only (the guard's test)
+    origin: dict | None = None  # where the entry was written: {"run", "loop", "role"}
 
 
 class VectorBackend(Protocol):
@@ -192,6 +214,7 @@ class CacheStats:
     cross_model_hits: Counter = field(default_factory=Counter)
     entity_mismatch_hits: Counter = field(default_factory=Counter)
     tool_call_entries_refused: Counter = field(default_factory=Counter)  # hits not served
+    entity_guard_refusals: Counter = field(default_factory=Counter)  # hits not served
 
     def hit_rate(self, agent: str | None = None) -> float:
         lk = self.lookups[agent] if agent else sum(self.lookups.values())
@@ -209,6 +232,8 @@ class SemanticCache:
         model_aware: bool = False,
         skip_tool_calls: bool = False,
         version_key: str | None = None,
+        role_scoped: bool = False,
+        entity_guard: bool = False,
     ) -> None:
         if scope not in {"agent", "pipeline"}:
             raise ValueError(scope)
@@ -219,10 +244,14 @@ class SemanticCache:
         self.model_aware = model_aware
         self.skip_tool_calls = skip_tool_calls
         self.version_key = version_key
+        self.role_scoped = role_scoped
+        self.entity_guard = entity_guard
         self.stats = CacheStats()
 
-    def _namespace(self, agent: str, model: str) -> str:
+    def _namespace(self, agent: str, model: str, role: str | None = None) -> str:
         ns = f"agent:{agent}" if self.scope == "agent" else "pipeline"
+        if self.role_scoped:
+            ns = f"{ns}|role:{role or agent}"
         if self.version_key is not None:
             ns = f"{ns}|version:{self.version_key}"
         return f"{ns}|model:{model}" if self.model_aware else ns
@@ -233,18 +262,35 @@ class SemanticCache:
         return f"[{agent}]\n{pipeline_context}\n---\n{local_input}"
 
     def lookup(
-        self, agent: str, model: str, local_input: str, pipeline_context: str
+        self,
+        agent: str,
+        model: str,
+        local_input: str,
+        pipeline_context: str,
+        role: str | None = None,
+        entity_text: str | None = None,
     ) -> tuple[CacheHit | None, np.ndarray, int]:
-        """Return (hit or None, query embedding, embedding tokens billed)."""
+        """Return (hit or None, query embedding, embedding tokens billed).
+
+        ``role`` names the agent's role for this request (planner, aggregator, ...), used for
+        namespaces when ``role_scoped`` and for classifying hits. ``entity_text`` is the query
+        text whose entities the guard compares (defaults to ``local_input``).
+        """
         vecs, tokens = self.embedder.embed([self.key_text(agent, local_input, pipeline_context)])
         vec = vecs[0]
         self.stats.lookups[agent] += 1
-        found = self.backend.nearest(self._namespace(agent, model), vec)
+        found = self.backend.nearest(self._namespace(agent, model, role), vec)
         if found is None or found[0] < self.threshold:
             return None, vec, tokens
         sim, payload = found
         if self.skip_tool_calls and _has_tool_call_args(payload["response"].get("tool_calls")):
             self.stats.tool_call_entries_refused[agent] += 1
+            return None, vec, tokens
+        query = local_input if entity_text is None else entity_text
+        stored_q = payload.get("query_entities")
+        q_mismatch = stored_q is not None and frozenset(stored_q) != extract_entities(query)
+        if self.entity_guard and q_mismatch:
+            self.stats.entity_guard_refusals[agent] += 1
             return None, vec, tokens
         self.stats.hits[agent] += 1
         if payload["model"] != model:
@@ -254,7 +300,7 @@ class SemanticCache:
         if mismatch:
             self.stats.entity_mismatch_hits[agent] += 1
         hit = CacheHit(LLMResponse.from_dict(payload["response"]), sim, payload["model"],
-                       mismatch)
+                       mismatch, q_mismatch, payload.get("origin"))
         return hit, vec, tokens
 
     def store(
@@ -264,6 +310,9 @@ class SemanticCache:
         vector: np.ndarray,
         response: LLMResponse,
         local_input: str | None = None,
+        role: str | None = None,
+        entity_text: str | None = None,
+        origin: dict | None = None,
     ) -> bool:
         """Store a response. Returns False if it was withheld (``skip_tool_calls``)."""
         if self.skip_tool_calls and _has_tool_call_args(response.tool_calls):
@@ -271,7 +320,11 @@ class SemanticCache:
         payload = {"model": model, "agent": agent, "response": response.to_dict()}
         if local_input is not None:
             payload["entities"] = sorted(extract_entities(local_input))
-        self.backend.add(self._namespace(agent, model), vector, payload)
+            query = local_input if entity_text is None else entity_text
+            payload["query_entities"] = sorted(extract_entities(query))
+        if origin is not None:
+            payload["origin"] = origin
+        self.backend.add(self._namespace(agent, model, role), vector, payload)
         return True
 
     def reset(self) -> None:
