@@ -121,6 +121,19 @@ These pilot tasks came from the evaluation suite. Of its 18 GAIA tasks, 8 were s
   price; providers batch many requests and charge 30-100 times less. The self-hosted price is
   reported as a sensitivity check.
 
+## 2026-11-25. Evaluation run: discarded first launch (operational deviation)
+
+- The main stream was launched at 18:57 UTC from commit e46cf85. A process check used the
+  pattern `costcompose run`, which does not match the command `costcompose -v run`, so the
+  running parts looked stopped and a second copy of each part was launched. Both copies ran
+  concurrently from about 18:58 to 19:30, writing duplicate rows (83-203 per part) and sharing
+  Redis cache namespaces, so cache configurations could be served entries written by their
+  twin and lost entries when the twin reset its namespace.
+- No results from this launch were summarised or read. All its output was moved to
+  `results/full_discarded_dup_launch` and is excluded from the analysis.
+- The main stream was relaunched from scratch at 19:31 UTC from the same commit, one process
+  per part, detached from the terminal. Process checks now use `pgrep -fc "costcompose -v run"`.
+
 ## Next
 
 - Commit the preregistration, then run both evaluation streams once.
