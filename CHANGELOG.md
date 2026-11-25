@@ -4,6 +4,7 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- Seed-averaged oracle bound next to the per-run one; routed configs are placed against it. `docs/DEVLOG.md`: every post-data change, what prompted it, and what it changed.
 - Answer F1 (MuSiQue's official metric) on every record; mean F1 per config and paired F1 differences in the report.
 - Prompts: reasoner, aggregator and single agent give a best answer instead of "unknown" and the answer rather than a sentence. This changes every configuration's requests; earlier runs are not comparable.
 - Reference points: `llama_only`, `haiku_only`, `sonnet_only` (core). The report adds each single model's cost and success and the task-level oracle bound, with routed configs placed against it. `make run-dev-refs` runs them on the development set.

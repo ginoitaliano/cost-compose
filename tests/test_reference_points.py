@@ -50,3 +50,17 @@ def test_oracle_takes_the_cheapest_model_that_succeeds():
 def test_oracle_needs_baseline_and_another_model():
     recs = [_rec("baseline", "t", True, 0.02)]
     assert _oracle(recs, {"baseline": {}}) is None
+
+
+def test_seed_averaged_oracle_ignores_a_lucky_run():
+    costs = {"llama_only": 0.001, "baseline": 0.02}
+    recs = []
+    for seed, llama_ok in ((0, True), (1, False), (2, False)):  # Llama lucky once
+        for c, cost in costs.items():
+            ok = llama_ok if c == "llama_only" else True
+            recs.append({**_rec(c, "t", ok, cost), "seed": seed})
+    o = _oracle(recs, {c: {} for c in costs})
+    assert o["picks"]["llama_only"]["rate"] == 1 / 3  # the per-run oracle takes the lucky run
+    a = o["seed_averaged"]
+    assert a["picks"]["baseline"]["rate"] == 1.0 and a["expected_success"] == 1.0
+    assert a["saving"] == 0.0 and a["seeds_per_task"] == [3]
