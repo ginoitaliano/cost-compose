@@ -18,6 +18,8 @@ data/tasks/gaia*.jsonl
 data/tasks/musique*.jsonl
 data/tasks/musique*.json
 data/corpus/musique/
+data/corpus_reuse/
 data/tasks/suite.jsonl
+data/tasks/suite_reuse.jsonl
 .DS_Store
 .ipynb_checkpoints/
