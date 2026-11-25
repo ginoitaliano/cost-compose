@@ -34,6 +34,7 @@ class Runtime:
     seed: int | None = None
     trace: TaskTrace = field(default_factory=TaskTrace)
     tools: ToolRegistry = field(init=False)
+    current_loop: int | None = None  # id of the reasoning loop running now, within the task
 
     def __post_init__(self) -> None:
         self.tools = ToolRegistry(search_fn=self._search_text)
@@ -56,20 +57,39 @@ class Runtime:
         local_input: str,
         pipeline_context: str,
         use_tools: bool = False,
+        role: str | None = None,
+        entity_text: str | None = None,
+        loop_step: int = 0,
     ) -> LLMResponse:
+        """The single choke point for LLM requests: route, look up the cache, call, meter.
+
+        ``role`` is the agent's role for this request (the orchestrator plans and aggregates).
+        ``entity_text`` is the query text for the cache's entity checks. ``loop_step`` is the
+        request's position in a reasoning loop (0 outside loops), for ``first_step_only``.
+        """
+        role = role or agent
         decision = self.router.route(features)
         t0 = time.perf_counter()
         vec, emb_tokens = None, 0
-        if self.cache is not None:
+        use_cache = self.cache is not None and not (
+            self.cfg.caching.first_step_only and loop_step > 0
+        )
+        refused = False
+        if use_cache:
+            before = self.cache.stats.entity_guard_refusals[agent]
             hit, vec, emb_tokens = self.cache.lookup(
-                agent, decision.model, local_input, pipeline_context
+                agent, decision.model, local_input, pipeline_context, role, entity_text
             )
+            refused = self.cache.stats.entity_guard_refusals[agent] > before
             if hit is not None:
                 emb = self._embed_cost(emb_tokens)
+                origin = self._hit_origin(hit.origin)
+                cross_role = bool(hit.origin) and hit.origin.get("role", role) != role
                 self.trace.calls.append(
                     CallRecord(agent, decision.model, decision.tier, decision.score, 0, 0, emb,
                                emb, True, hit.source_model != decision.model, emb_tokens,
-                               time.perf_counter() - t0, hit.entity_mismatch)
+                               time.perf_counter() - t0, hit.entity_mismatch, role, True,
+                               origin, cross_role, hit.query_entity_mismatch)
                 )
                 return hit.response
 
@@ -80,8 +100,10 @@ class Runtime:
             temperature=self.cfg.agents.temperature,
             seed=self.seed,
         )
-        if self.cache is not None and vec is not None:
-            if not self.cache.store(agent, decision.model, vec, resp, local_input):
+        if use_cache and vec is not None:
+            origin = {"run": self.trace.run_id, "loop": self.current_loop, "role": role}
+            if not self.cache.store(agent, decision.model, vec, resp, local_input, role,
+                                    entity_text, origin):
                 self.trace.tool_call_responses_not_cached += 1
         u = resp.usage
         emb = self._embed_cost(emb_tokens)
@@ -92,9 +114,20 @@ class Runtime:
         self.trace.calls.append(
             CallRecord(agent, decision.model, decision.tier, decision.score, u.prompt_tokens,
                        u.completion_tokens, cost + emb, ref + emb, False, False, emb_tokens,
-                       time.perf_counter() - t0)
+                       time.perf_counter() - t0, role=role, cache_lookup=use_cache,
+                       guard_refused=refused)
         )
         return resp
+
+    def _hit_origin(self, origin: dict | None) -> str:
+        """Where a served entry was written, relative to the request it now answers."""
+        if not origin:
+            return "unknown"
+        if origin.get("run") != self.trace.run_id:
+            return "cross_task"
+        if self.current_loop is not None and origin.get("loop") == self.current_loop:
+            return "same_loop"
+        return "same_task"
 
 
 # -- helpers ---------------------------------------------------------------------------------
@@ -131,7 +164,7 @@ def plan_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
     system = prompts.PLANNER.format(max_subtasks=rt.cfg.agents.max_subtasks)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": q}]
     feats = ComplexityFeatures(approx_tokens(q), 0, 0, 0)
-    resp = rt.call_llm("orchestrator", messages, feats, q, "")
+    resp = rt.call_llm("orchestrator", messages, feats, q, "", role="planner", entity_text=q)
     subtasks = parse_plan(resp.content, q, rt.cfg.agents.max_subtasks)
     rt.trace.subtasks = len(subtasks)
     return {"subtasks": subtasks, "index": 0, "outputs": [], "context": ""}
@@ -148,7 +181,8 @@ def retrieve_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
         {"role": "user", "content": user},
     ]
     feats = ComplexityFeatures(approx_tokens(sub), 0, approx_tokens(ptext), state["index"] + 1)
-    resp = rt.call_llm("retriever", messages, feats, user, _pipeline_context(state))
+    resp = rt.call_llm("retriever", messages, feats, user, _pipeline_context(state),
+                       role="retriever", entity_text=sub)
     return {"context": resp.content}
 
 
@@ -174,11 +208,14 @@ def _reasoning_loop(
     cached: list[bool] = []  # per draft: served from the cache rather than generated
     transcript: list[str] = []
     tools_used = 0
-    for _ in range(rt.cfg.agents.max_iterations):
+    rt.trace.loops += 1
+    rt.current_loop = rt.trace.loops  # tags cache entries and classifies hits as same-loop
+    for step in range(rt.cfg.agents.max_iterations):
         context_tokens = sum(approx_tokens(str(m.get("content") or "")) for m in messages)
         feats = ComplexityFeatures(approx_tokens(query), tools_used, context_tokens, depth)
         local = user + "\n" + "\n".join(transcript)
-        resp = rt.call_llm(agent, messages, feats, local, pipeline_context, use_tools=True)
+        resp = rt.call_llm(agent, messages, feats, local, pipeline_context, use_tools=True,
+                           role=agent, entity_text=query, loop_step=step)
         if resp.tool_calls:
             # History holds one tool call per assistant turn, each followed by its result, even
             # when a model requested several at once. Every provider accepts this form, while
@@ -223,6 +260,7 @@ def _reasoning_loop(
             break
         messages.append({"role": "assistant", "content": resp.content})
         messages.append({"role": "user", "content": prompts.REFINE})
+    rt.current_loop = None
     return drafts
 
 
@@ -264,5 +302,6 @@ def aggregate_node(rt: Runtime, state: dict[str, Any]) -> dict[str, Any]:
     ]
     depth = len(state["subtasks"]) + 1
     feats = ComplexityFeatures(approx_tokens(state["question"]), 0, approx_tokens(results), depth)
-    resp = rt.call_llm("orchestrator", messages, feats, user, f"Task: {state['question']}")
+    resp = rt.call_llm("orchestrator", messages, feats, user, f"Task: {state['question']}",
+                       role="aggregator", entity_text=state["question"])
     return {"final": resp.content}

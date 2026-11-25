@@ -1,0 +1,4 @@
+# composed with the guarded cache (see cache_only_guarded.yaml).
+extends: ../composed.yaml
+name: composed_guarded
+caching: {role_scoped: true, first_step_only: true, entity_guard: true, skip_tool_calls: true}

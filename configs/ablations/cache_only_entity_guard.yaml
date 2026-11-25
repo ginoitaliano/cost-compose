@@ -1,0 +1,5 @@
+# One guard at a time: cache_only with entity_guard on (hits are refused when the question's or subtask's IDs, numbers or dates differ).
+# Compared with cache_only, it attributes the change in false hits to this guard alone.
+extends: ../cache_only.yaml
+name: cache_only_entity_guard
+caching: {entity_guard: true}

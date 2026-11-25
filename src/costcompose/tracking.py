@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -29,6 +30,12 @@ class CallRecord:
     embedding_tokens: int
     latency_s: float
     entity_mismatch: bool = False  # cache hit served from a request with different entities
+    role: str = ""  # the agent's role for this request: planner, retriever, reasoner, ...
+    cache_lookup: bool = True  # False when the cache was bypassed (first_step_only)
+    hit_origin: str = ""  # on a hit: "same_loop" | "same_task" | "cross_task" | "unknown"
+    cross_role_hit: bool = False  # hit served from an entry written by another role
+    query_entity_mismatch: bool = False  # hit whose query-text entities differ
+    guard_refused: bool = False  # a hit the entity guard refused (served by the model instead)
 
 
 @dataclass
@@ -36,6 +43,8 @@ class TaskTrace:
     """Everything recorded while one task runs through the pipeline."""
 
     calls: list[CallRecord] = field(default_factory=list)
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # tags cache entries
+    loops: int = 0  # reasoning loops started; the current one tags cache entries
     reasoning_iterations: int = 0
     early_stops: int = 0
     cached_drafts: int = 0  # reasoner drafts served from the cache
@@ -53,6 +62,7 @@ class TaskTrace:
     def summary(self) -> dict:
         llm_calls = [c for c in self.calls if not c.cache_hit]
         hits = [c for c in self.calls if c.cache_hit]
+        lookups = [c for c in self.calls if c.cache_lookup]
         by_agent_lookups: Counter = Counter(c.agent for c in self.calls)
         by_agent_hits: Counter = Counter(c.agent for c in hits)
         return {
@@ -64,6 +74,17 @@ class TaskTrace:
             "llm_calls": len(llm_calls),
             "requests": len(self.calls),
             "cache_hits": len(hits),
+            "cache_lookups": len(lookups),
+            "cache_bypassed": len(self.calls) - len(lookups),
+            "hits_by_origin": dict(Counter(c.hit_origin for c in hits)),
+            "hits_by_role": dict(Counter(c.role for c in hits)),
+            "lookups_by_role": dict(Counter(c.role for c in lookups)),
+            "cross_role_hits": sum(c.cross_role_hit for c in hits),
+            "query_entity_mismatch_hits": sum(c.query_entity_mismatch for c in hits),
+            "entity_guard_refusals": sum(c.guard_refused for c in self.calls),
+            # (role, routing score) per request, for the score distribution against rung cutoffs
+            "routing_scores": [[c.role or c.agent, round(c.complexity_score, 4)]
+                               for c in self.calls],
             "cross_model_hits": sum(c.cross_model_hit for c in hits),
             "entity_mismatch_hits": sum(c.entity_mismatch for c in hits),
             "entity_mismatch_hits_by_agent": dict(

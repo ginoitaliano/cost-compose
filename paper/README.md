@@ -28,6 +28,10 @@
 | Composition effect 4: early stops triggered by cache-replayed drafts | `cache_induced_early_stops`, `configs/ablations/composed_exclude_cached_drafts.yaml` |
 | Tool-call caching guard | `caching.skip_tool_calls`, `configs/ablations/composed_skip_tool_calls.yaml` |
 | Instruction versioning in cache keys | `caching.version_key` |
+| Guarded cache (role namespaces, first loop step only, entity guard, no tool-call caching) | `caching.role_scoped`, `caching.first_step_only`, `caching.entity_guard`, `caching.skip_tool_calls`; `configs/ablations/*_guarded.yaml` and `cache_only_{role_scoped,first_step,entity_guard,skip_tool_calls}.yaml` |
+| Hit mechanisms (same loop, same task, cross task, cross role) | `Runtime._hit_origin`, `cache_correctness.mechanisms` in `analysis.py` |
+| H1 with the guarded cache | `hypotheses.H1_guarded_cache` |
+| Routing score distribution | `routing_scores` per record, `analysis._routing_scores` |
 | Paired statistics (McNemar, paired bootstrap) | `analysis.compare` |
 | Primary (unit-tolerant) and strict scores, both reported | `evaluation.py`, "Scoring: primary vs strict" in the report |
 | Optional judge audit of the scorer by an off-ladder model | `judge.py`, `costcompose judge` |

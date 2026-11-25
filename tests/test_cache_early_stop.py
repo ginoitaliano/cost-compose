@@ -14,7 +14,8 @@ def _scripted(rt, script):
     """Replace the runtime's choke point with a script of (content, served_from_cache)."""
     it = iter(script)
 
-    def call_llm(agent, messages, features, local_input, pipeline_context, use_tools=False):
+    def call_llm(agent, messages, features, local_input, pipeline_context, use_tools=False,
+                 **_):
         content, hit = next(it)
         rt.trace.calls.append(CallRecord(agent, "gpt-4o", "fixed", 0.0, 0, 0, 0.0, 0.0, hit,
                                          False, 0, 0.0))
