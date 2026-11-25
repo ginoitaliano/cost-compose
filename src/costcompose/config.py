@@ -95,6 +95,9 @@ class EarlyStoppingConfig:
 @dataclass
 class AgentConfig:
     max_iterations: int = 5
+    # Output cap per request, the same for every model. None = provider default (unbounded on
+    # vLLM, where a degenerate generation then runs to the context limit).
+    max_output_tokens: int | None = None
     top_k: int = 4
     max_subtasks: int = 4
     temperature: float = 0.2

@@ -86,6 +86,12 @@ These pilot tasks came from the evaluation suite. Of its 18 GAIA tasks, 8 were s
   sampling defaults, so the request's temperature and seed apply as for the API models. The
   failed runs are retried on resume.
 
+- Seen after the change: one `llama_only` task timed out at 120 s per attempt. With no output
+  cap, vLLM allows a generation up to the remaining context (now about 130k tokens), and a
+  degenerate repeating output runs until the timeout. The 8,192 limit had masked this.
+- Changed: `agents.max_output_tokens: 4096`, sent with every request to every model. Answers,
+  drafts and plans are far shorter, so the cap only stops runaway generations.
+
 ## Next
 
 - Measure the noise floor: baseline on the development set with a second seed.

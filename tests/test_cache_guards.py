@@ -34,7 +34,7 @@ class Scripted:
         self.responses = iter(responses)
         self.calls = 0
 
-    def complete(self, model, messages, tools=None, temperature=0.0, seed=None):
+    def complete(self, model, messages, tools=None, temperature=0.0, seed=None, **_):
         self.calls += 1
         return next(self.responses)
 

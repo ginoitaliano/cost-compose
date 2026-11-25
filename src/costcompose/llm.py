@@ -64,6 +64,7 @@ class LLMClient(Protocol):
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.0,
         seed: int | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse: ...
 
 
@@ -102,7 +103,8 @@ class LiteLLMClient:
         self.timeout_s = timeout_s
         self.api_base = api_base  # None = provider default / environment
 
-    def complete(self, model, messages, tools=None, temperature=0.0, seed=None) -> LLMResponse:
+    def complete(self, model, messages, tools=None, temperature=0.0, seed=None,
+                 max_tokens=None) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -115,6 +117,8 @@ class LiteLLMClient:
             kwargs["tools"] = tools
         if seed is not None:
             kwargs["seed"] = seed
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         if self.api_base:
             kwargs["api_base"] = self.api_base
         resp = self._litellm.completion(**kwargs)
@@ -185,7 +189,8 @@ class FakeLLMClient:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, model, messages, tools=None, temperature=0.0, seed=None) -> LLMResponse:
+    def complete(self, model, messages, tools=None, temperature=0.0, seed=None,
+                 max_tokens=None) -> LLMResponse:
         self.calls += 1
         system = messages[0]["content"] if messages else ""
         user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")

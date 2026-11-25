@@ -79,7 +79,7 @@ class _Client:
     def __init__(self, broken):
         self.broken, self.calls = broken, []
 
-    def complete(self, model, messages, tools=None, temperature=0.0, seed=None):
+    def complete(self, model, messages, tools=None, temperature=0.0, seed=None, **_):
         self.calls.append(model)
         if model in self.broken:
             raise RuntimeError("404 not found")
@@ -115,3 +115,19 @@ def test_verbose_does_not_turn_on_litellm_request_logging(monkeypatch):
                      "--out", d, "--configs", "baseline"]) == 0
     assert logging.getLogger("LiteLLM").level == logging.WARNING
     assert logging.getLogger("httpx").level == logging.WARNING
+
+
+def test_every_request_carries_the_output_cap():
+    rt = _runtime("route_only")
+    seen = []
+
+    class Capture:
+        def complete(self, model, messages, tools=None, temperature=0.0, seed=None,
+                     max_tokens=None):
+            seen.append(max_tokens)
+            return LLMResponse("ANSWER: 1\nCONFIDENCE: 0.9\nSTATUS: FINAL", model, Usage(1, 1))
+
+    rt.llm = Capture()
+    reason_node(rt, dict(STATE))
+    assert seen and set(seen) == {4096}
+    assert cfg("baseline").agents.max_output_tokens == 4096

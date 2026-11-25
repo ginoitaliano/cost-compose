@@ -111,6 +111,7 @@ class Runtime:
             tools=self.tools.schemas if use_tools else None,
             temperature=self.cfg.agents.temperature,
             seed=self.seed,
+            max_tokens=self.cfg.agents.max_output_tokens,
         )
         if use_cache and vec is not None:
             origin = {"run": self.trace.run_id, "loop": self.current_loop, "role": role}
