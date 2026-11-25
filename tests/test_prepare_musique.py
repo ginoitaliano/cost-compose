@@ -130,3 +130,60 @@ def test_reuse_stream_end_to_end_logs_sharing(tmp_path):
     log = json.loads((tmp_path / "reuse.jsonl.log.json").read_text())
     assert log["reuse_share"] == 1.0 and log["clusters"]
     assert log["hop_sharing"]["tasks_sharing_a_hop"] == 8
+
+
+def test_exclude_and_support_sidecar(tmp_path):
+    src = tmp_path / "dev.jsonl"
+    src.write_text("".join(json.dumps(r) + "\n" for r in REUSE))
+    test_out = tmp_path / "test.jsonl"
+    mq.main(["--input", str(src), "--per-stratum", "3", "--out", str(test_out),
+             "--corpus-dir", str(tmp_path / "c_test" / "musique")])
+    dev_out = tmp_path / "devset.jsonl"
+    mq.main(["--input", str(src), "--per-stratum", "3", "--seed", "1", "--exclude",
+             str(test_out), "--out", str(dev_out), "--corpus-dir",
+             str(tmp_path / "c_dev" / "musique")])
+    test_ids = {t.id for t in load_tasks(test_out)}
+    dev_ids = {t.id for t in load_tasks(dev_out)}
+    assert dev_ids and not (test_ids & dev_ids)
+    sup = json.loads((tmp_path / "devset.jsonl.support.json").read_text())
+    assert set(sup) == dev_ids
+    files = {f.stem for f in (tmp_path / "c_dev" / "musique").glob("*.md")}
+    for s in sup.values():
+        assert set(s["support_docs"]) <= files
+        assert len(s["hop_support_docs"]) == len(s["subquestions"])
+
+
+def test_subquestions_fill_in_earlier_answers():
+    rec = _rec(1, 2)
+    rec["question_decomposition"] = [
+        {"id": 1, "question": "The Collegian >> owned by", "answer": "Houston Baptist University",
+         "paragraph_support_idx": 0},
+        {"id": 2, "question": "When was #1 founded?", "answer": "1960",
+         "paragraph_support_idx": 1}]
+    assert mq.resolved_subquestions(rec)[1] == "When was Houston Baptist University founded?"
+    assert mq.hop_support_docs(rec) == [mq.doc_id(rec["paragraphs"][0]),
+                                        mq.doc_id(rec["paragraphs"][1])]
+
+
+def test_retrieval_check_runs_offline(tmp_path):
+    spec = importlib.util.spec_from_file_location("retrieval_check",
+                                                  ROOT / "scripts" / "retrieval_check.py")
+    rc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+    src = tmp_path / "dev.jsonl"
+    src.write_text("".join(json.dumps(r) + "\n" for r in REUSE))
+    out, corpus = tmp_path / "t.jsonl", tmp_path / "corpus" / "musique"
+    mq.main(["--input", str(src), "--per-stratum", "2", "--out", str(out),
+             "--corpus-dir", str(corpus)])
+    res = rc.ceiling(out, corpus.parent, [1, 4], HashingEmbedder())
+    assert res["tasks"] == 4 and res["corpus_documents"] > 0
+    assert res["subquestion"]["low"]["4"]["n"] == 4  # 2 tasks x 2 hops
+    tid = load_tasks(out)[0].id
+    sup = json.loads((tmp_path / "t.jsonl.support.json").read_text())[tid]
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text(json.dumps({"config": "baseline", "task_id": tid, "complexity": "low",
+                                "success": True,
+                                "retrieved_doc_ids": [sup["support_docs"]]}) + "\n")
+    p = rc.pipeline(out, runs)
+    assert p["baseline"]["support_recall"]["rate"] == 1.0
+    assert p["baseline"]["success_all_retrieved"] == {"rate": 1.0, "n": 1}

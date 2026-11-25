@@ -19,6 +19,9 @@ data/tasks/musique*.jsonl
 data/tasks/musique*.json
 data/corpus/musique/
 data/corpus_reuse/
+data/corpus_dev/
+data/tasks/dev*.jsonl
+data/tasks/dev*.json
 data/tasks/suite.jsonl
 data/tasks/suite_reuse.jsonl
 .DS_Store

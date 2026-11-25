@@ -1,4 +1,4 @@
-.PHONY: install dev test lint dry-run suite suite-reuse run run-extended run-reuse report spotcheck docker clean
+.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run run-extended run-reuse report spotcheck docker clean
 
 install:
 	pip install -e ".[all]"
@@ -67,6 +67,16 @@ RUN_ARGS = --tasks data/tasks/suite.jsonl --corpus data/corpus --seeds 0 1 2 --o
 # Full study, 3 seeds. Needs keys, Redis and the vLLM server.
 run:
 	costcompose -v run --configs $(CORE_CONFIGS) $(RUN_ARGS)
+
+# Development set: MuSiQue only, disjoint from both evaluation suites, 20 per stratum, with the
+# reuse stream's clustering so cache methods have reuse to work with. All method changes are made
+# on this set; the evaluation suites are run once. Build suite and suite-reuse first.
+suite-dev:
+	python scripts/prepare_musique.py $(if $(MUSIQUE_INPUT),--input $(MUSIQUE_INPUT)) \
+		--per-stratum 20 --reuse-share $(REUSE_SHARE) --seed 1 \
+		--exclude data/tasks/musique_subset.jsonl data/tasks/musique_reuse.jsonl \
+		--out data/tasks/dev.jsonl --corpus-dir data/corpus_dev/musique
+	costcompose validate --tasks data/tasks/dev.jsonl
 
 # Caching configs on the reuse stream, into their own output directory.
 REUSE_CONFIGS = baseline cache_only route_only composed \

@@ -21,7 +21,11 @@ def chunk(text: str, max_chars: int = 800) -> list[str]:
     chunks: list[str] = []
     buf = ""
     for p in paras:
-        if buf and len(buf) + len(p) + 2 > max_chars:
+        # A heading alone is never a chunk: it stays with the text that follows it. Without
+        # this, a document whose first paragraph is long splits into a title-only passage and
+        # an untitled one (most Wikipedia paragraphs in the MuSiQue corpus).
+        heading_only = buf.startswith("#") and "\n" not in buf
+        if buf and not heading_only and len(buf) + len(p) + 2 > max_chars:
             chunks.append(buf)
             buf = p
         else:
