@@ -92,8 +92,29 @@ These pilot tasks came from the evaluation suite. Of its 18 GAIA tasks, 8 were s
 - Changed: `agents.max_output_tokens: 4096`, sent with every request to every model. Answers,
   drafts and plans are far shorter, so the cap only stops runaway generations.
 
+## 2026-11-25. Development run 3 (two seeds for the reference configurations)
+
+- Seen: run-to-run spread is larger than one baseline suggested. Success varies by 2.4 pp
+  between seeds for `baseline` and 8.2 pp for `route_only` (17.7 pp for `haiku_only` in the low
+  stratum). Differences under about 8 pp on the development set are not distinguishable from
+  rerunning.
+- Seen: per task, Claude Haiku 4.5 costs 59% more than GPT-4o ($0.034 vs $0.022) at a third of
+  its list price per token, through more calls (13.8 vs 10.1) and more tokens. The heuristic
+  router sends 54% of requests to Haiku and raises cost by 48%.
+- Seen: the per-run oracle saving (49.4%) fell to 36.7% [13.5, 55.8] when averaged over two
+  seeds. Its picks: no model solves the task 37%, GPT-4o 27%, Haiku 18%, Sonnet 10%, Llama 8%.
+- Seen: an iso-success oracle (never worse than GPT-4o on any task, tasks GPT-4o never solves
+  left on GPT-4o) saves 3.4% [1.0, 6.3]. Sending the tasks GPT-4o never solves to Llama instead
+  saves 67.2% [54.7, 78.5]. Routing headroom at equal quality is small; the large saving is in
+  tasks no model solves.
+- Decided: no cascade router. Its ceiling at equal quality is about 3%. Predicting task failure
+  is named in the paper as the open problem.
+- Decided: the evaluation run is fixed in `PREREGISTRATION.md`. The analysis adds the
+  iso-success oracle, tokens per task, bootstrap p-values and a Holm-corrected confirmatory set
+  (C1-C4). The composed guarded and structured configurations and `composed_model_aware` move to
+  the extended set; the main run has 15 configurations and the reuse run 9.
+
 ## Next
 
-- Measure the noise floor: baseline on the development set with a second seed.
-- Rerun the development set after the prompt change; read the oracle bound.
-- Write and commit the preregistration, then run the evaluation suites once.
+- Set the Llama price from the GPU rate and measured throughput (PREREGISTRATION.md).
+- Commit the preregistration, then run both evaluation streams once.

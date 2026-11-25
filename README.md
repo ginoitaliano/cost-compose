@@ -44,7 +44,9 @@ Every LLM request from every node goes through one choke point (`Runtime.call_ll
 | `composed_skip_tool_calls` | `composed` | `caching.skip_tool_calls: true` | savings from replayed action calls |
 | `cache_only_guarded` | `cache_only` | all four cache guards on | false hits removed, caching alone |
 | `composed_guarded` | `composed` | all four cache guards on | composition with the guarded cache |
-| `cache_route_guarded` | `cache_route` | all four cache guards on | Oracle routing bound | Per task run, the cheapest single-model config that succeeded: the most a task-level router over the ladder's models could save. This per-run bound profits from run-to-run noise, so a seed-averaged bound is reported too: per task, the cheapest model with the highest success averaged over seeds. Routed configs are placed against the seed-averaged bound | `hypotheses.oracle_routing_bound`, "Single models and the oracle bound" in `summary.md` |
+| `cache_route_guarded` | `cache_route` | all four cache guards on | Confirmatory tests | C1-C4 from `PREREGISTRATION.md`, Holm-corrected, printed first | `hypotheses.confirmatory`, "Confirmatory tests" in `summary.md` |
+| Iso-success oracle | The cheapest single model per task that is never worse than baseline; and the same with tasks baseline never solves sent to the cheapest model | `oracle_routing_bound.iso_success`, `iso_success_with_give_up` |
+| Oracle routing bound | Per task run, the cheapest single-model config that succeeded: the most a task-level router over the ladder's models could save. This per-run bound profits from run-to-run noise, so a seed-averaged bound is reported too: per task, the cheapest model with the highest success averaged over seeds. Routed configs are placed against the seed-averaged bound | `hypotheses.oracle_routing_bound`, "Single models and the oracle bound" in `summary.md` |
 | Subtask cache | Resolved subtask answers served across subtasks and tasks; a hit skips retrieval and reasoning | `configs.<name>.cache_correctness.subtask_cache`, "Subtask cache" in `summary.md` |
 | H1 with the structured cache | The H1 test with `cache_only_structured` and `cache_route_structured` | `hypotheses.H1_structured_cache` |
 | H1 with the guarded cache |
@@ -138,7 +140,9 @@ docker run -d -p 6379:6379 redis:7-alpine  # cache backend
 # (data/tasks/enterprise.jsonl, if present) and MuSiQue filling the rest
 make suite                                 # MUSIQUE_INPUT=path/to/musique_ans_v1.0_dev.jsonl for the official file
 
-make run            # Table 1 + the ablations H1-H3 need, seeds 0 1 2 -> results/full/
+make run            # the preregistered run (PREREGISTRATION.md), seeds 0 1 2 -> results/full/
+# or the same run as three parallel processes, then merge:
+#   make run-a & make run-b & make run-c; wait; make merge
 make run-extended   # optional: the other ablations, appended to results/full/
 make report         # rebuild summary.md / summary.json from runs.jsonl
 make spotcheck      # 10% human spot-check sample -> results/full/spotcheck.csv

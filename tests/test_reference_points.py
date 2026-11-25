@@ -64,3 +64,22 @@ def test_seed_averaged_oracle_ignores_a_lucky_run():
     a = o["seed_averaged"]
     assert a["picks"]["baseline"]["rate"] == 1.0 and a["expected_success"] == 1.0
     assert a["saving"] == 0.0 and a["seeds_per_task"] == [3]
+
+
+def test_iso_success_oracle_never_drops_below_baseline():
+    costs = {"llama_only": 0.001, "haiku_only": 0.004, "baseline": 0.02, "sonnet_only": 0.03}
+    solves = {"t1": {"llama_only", "baseline"}, "t2": {"baseline", "sonnet_only"},
+              "t3": {"sonnet_only"}, "t4": set()}
+    recs = [_rec(c, t, c in ok, costs[c]) for t, ok in solves.items() for c in costs]
+    o = _oracle(recs, {c: {} for c in costs})
+    iso = o["iso_success"]
+    # t1 -> llama, t2 -> baseline, t3 and t4 stay on baseline (baseline never solves them)
+    assert abs(iso["saving"] - (1 - (0.001 + 0.02 + 0.02 + 0.02) / 0.08)) < 1e-9
+    assert iso["expected_success"] == iso["baseline_success"] == 0.5
+    give_up = o["iso_success_with_give_up"]  # t3, t4 -> llama
+    assert abs(give_up["saving"] - (1 - (0.001 + 0.02 + 0.001 + 0.001) / 0.08)) < 1e-9
+
+
+def test_confirmatory_set_is_holm_corrected():
+    from costcompose.analysis import _holm
+    assert _holm([0.01, 0.04, None, 0.03]) == [0.03, 0.06, None, 0.06]

@@ -190,12 +190,23 @@ def run_experiment(
     return write_report(out)
 
 
-def write_report(out_dir: str | Path) -> dict[str, Any]:
+def write_report(
+    out_dir: str | Path, exclude_tasks: set[str] | None = None, name: str = "summary"
+) -> dict[str, Any]:
+    """Write <name>.json and <name>.md from runs.jsonl, optionally leaving some tasks out
+    (for example tasks seen in pilots, as a sensitivity analysis)."""
     out = Path(out_dir)
     records = [json.loads(x) for x in (out / "runs.jsonl").read_text().splitlines() if x.strip()]
+    if exclude_tasks:
+        records = [r for r in records if r["task_id"] not in exclude_tasks]
     summary = analysis.summarize(records)
-    (out / "summary.json").write_text(json.dumps(summary, indent=2))
-    (out / "summary.md").write_text(analysis.to_markdown(summary))
+    if exclude_tasks:
+        summary["excluded_tasks"] = sorted(exclude_tasks)
+    (out / f"{name}.json").write_text(json.dumps(summary, indent=2))
+    md = analysis.to_markdown(summary)
+    if exclude_tasks:
+        md = md.replace("# Results", f"# Results without {len(exclude_tasks)} excluded tasks", 1)
+    (out / f"{name}.md").write_text(md)
     return summary
 
 

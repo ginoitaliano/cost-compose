@@ -131,3 +131,20 @@ def test_every_request_carries_the_output_cap():
     reason_node(rt, dict(STATE))
     assert seen and set(seen) == {4096}
     assert cfg("baseline").agents.max_output_tokens == 4096
+
+
+def test_report_can_leave_out_pilot_tasks():
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        assert main(["run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks",
+                     str(SAMPLE_TASKS), "--corpus", str(SAMPLE_CORPUS), "--seeds", "0",
+                     "--out", str(out), "--configs", "baseline"]) == 0
+        first = json.loads(SAMPLE_TASKS.read_text().splitlines()[0])
+        pilot = out / "pilot.jsonl"
+        pilot.write_text(json.dumps(first) + "\n")
+        assert main(["report", str(out), "--exclude-tasks", str(pilot)]) == 0
+        s = json.loads((out / "summary.excluded.json").read_text())
+        full = json.loads((out / "summary.json").read_text())
+    assert s["excluded_tasks"] == [first["id"]]
+    runs = full["configs"]["baseline"]["n"]["task_runs"]
+    assert s["configs"]["baseline"]["n"]["task_runs"] == runs - 1

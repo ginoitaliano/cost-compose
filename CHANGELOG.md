@@ -4,6 +4,7 @@
 
 Every new flag defaults to the previous behaviour; dry-run records for the existing configurations are unchanged on all previously recorded fields.
 
+- `PREREGISTRATION.md` fixes the evaluation run: streams, 15 main and 9 reuse configurations, outcomes, a confirmatory set C1-C4 with Holm correction, and pre-declared estimands. The report leads with the confirmatory tests, adds bootstrap p-values, the iso-success oracle (with and without giving up on tasks baseline never solves), and input and output tokens per task. `make run-a`/`run-b`/`run-c` and `make merge` run the main stream as three processes. `costcompose report --exclude-tasks` writes a sensitivity report without given tasks (the pilot tasks). `composed_model_aware`, `composed_guarded` and `composed_structured` move to the extended set.
 - `agents.max_output_tokens: 4096`: one output cap for every model's requests. Without it, vLLM let a degenerate Llama generation run toward the 131k context limit until the 120 s timeout.
 - `serve_llama.sh`: Llama 3.1 at its native 131,072-token context (`MAX_MODEL_LEN`), was 8,192, which failed 3 of 60 Llama-only development runs; `--generation-config vllm`.
 - Seed-averaged oracle bound next to the per-run one; routed configs are placed against it. `docs/DEVLOG.md`: every post-data change, what prompted it, and what it changed.
