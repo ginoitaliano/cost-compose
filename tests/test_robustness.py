@@ -103,3 +103,15 @@ def test_preflight_checks_every_model_and_names_failures(monkeypatch):
     broken = _Client({"hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"})
     with pytest.raises(PreflightError, match="HOSTED_VLLM_API_BASE is not set"):
         preflight(configs, broken, {"text-embedding-3-small": _Embedder()})
+
+
+def test_verbose_does_not_turn_on_litellm_request_logging(monkeypatch):
+    import logging
+
+    monkeypatch.delenv("LITELLM_LOG", raising=False)
+    with tempfile.TemporaryDirectory() as d:
+        assert main(["-v", "run", "--dry-run", "--config-dir", str(CONFIGS), "--tasks",
+                     str(SAMPLE_TASKS), "--corpus", str(SAMPLE_CORPUS), "--seeds", "0",
+                     "--out", d, "--configs", "baseline"]) == 0
+    assert logging.getLogger("LiteLLM").level == logging.WARNING
+    assert logging.getLogger("httpx").level == logging.WARNING
