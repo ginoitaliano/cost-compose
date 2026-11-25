@@ -129,7 +129,9 @@ MuSiQue fills the gap. It is multi-hop question answering over Wikipedia paragra
 
 Human spot-checks (paper §3.4) check the automated scorer. `costcompose spotcheck sample results/full --tasks data/tasks/suite.jsonl` draws a seeded 10% of task IDs per complexity stratum (4 per stratum at 40/40/40) and one seed per sampled task. It writes a CSV row for every config that ran that task and seed, so scorer errors that depend on the config show up. It will not overwrite an existing CSV without `--force`. Fill `human_success` with 1 or 0, then `costcompose spotcheck score results/full/spotcheck.csv` reports agreement and Cohen's kappa against `auto_success`, overall and per config with n, and lists the disagreements. The CSV holds task questions, and for GAIA tasks it must not be published; `results/` is git-ignored.
 
-Runs are resumable: `runs.jsonl` is appended one task at a time, and a rerun skips every (config, seed, task) already recorded. A failed task is logged with its error and scored as a failure rather than stopping the run.
+Before the first task, a run calls every model its configs can use once, plus the embedder, and stops with a list of the ones that failed (`--skip-preflight` turns this off). A missing key or a stopped Llama server then costs seconds, not a column of failed tasks.
+
+Runs are resumable: `runs.jsonl` is appended one task at a time, and a rerun skips every (config, seed, task) already recorded. A task that raises an error is logged with it and scored as a failure rather than stopping the run. On a rerun, those errored task runs are moved to `runs.errors.jsonl` and retried, so an outage is not counted as a configuration's failure; a task that errors again is recorded again. `--no-retry-errors` keeps them instead.
 
 Run any subset directly:
 
@@ -208,6 +210,8 @@ Early stopping is a loop-level stop rule inspired by CALM (Schuster et al. 2022)
 The entity extractor is a small set of regular expressions (dates, identifiers such as `ORD-48213` or `#5521`, numbers). It reads the agent's whole local input, including retrieved passages and tool transcripts, so it errs toward flagging a hit as a mismatch. It also misses differences its patterns do not cover, such as names. Self-reported `CONFIDENCE:` values are ignored. Read the entity-mismatch share as an indicator of wrong-entry hits, not as an exact count or a bound.
 
 Both engines call the same node functions. LangGraph is the default when installed and is what LangSmith traces; the native engine exists so the core runs and tests with only NumPy and PyYAML. CI checks that both produce the same answers, call counts, cache hits, routing, early stops, cache-induced stops and entity-mismatch hits, in both `multi_agent` and `single_agent` mode.
+
+In the reasoning loop, every tool call is written into the conversation as its own assistant turn followed by its result, even when a model requested several in one response. Some chat templates (Llama 3.1's) reject a turn with more than one tool call, and with routing, the step after a GPT-4o or Claude call that used parallel tools can go to Llama. Every provider accepts the one-call-per-turn form, so all configurations use it.
 
 Routing features use a 4-characters-per-token estimate. Billing uses the token counts the provider returns.
 

@@ -59,6 +59,62 @@ def _done_keys(path: Path) -> set[tuple[str, int, str]]:
     return keys
 
 
+def _set_aside_errors(path: Path) -> int:
+    """Move rows that ended in an error to runs.errors.jsonl so a rerun retries them.
+
+    A task that raised (an unreachable endpoint, a rate limit that outlasted the retries, a
+    provider rejecting a request) says nothing about the configuration, and keeping it would
+    count an outage as a task failure. The set-aside rows are appended to runs.errors.jsonl, so
+    nothing is lost; a task that errors again on the rerun is recorded again as a failure.
+    """
+    if not path.exists():
+        return 0
+    rows = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+    failed = [r for r in rows if r.get("error")]
+    if failed:
+        with (path.parent / "runs.errors.jsonl").open("a") as fh:
+            fh.writelines(json.dumps(r) + "\n" for r in failed)
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows if not r.get("error")))
+    return len(failed)
+
+
+class PreflightError(RuntimeError):
+    pass
+
+
+def models_used(cfg: ExperimentConfig) -> list[str]:
+    """Every generation model a configuration can call."""
+    if cfg.routing.enabled:
+        return [r.model for r in cfg.routing.ladder]
+    return [cfg.routing.default_model]
+
+
+def preflight(configs: list[ExperimentConfig], llm, embedders: dict[str, Any]) -> list[str]:
+    """Call each model and embedder the run will use once, before task 1.
+
+    Raises PreflightError naming every model that fails, so a dead endpoint or missing key stops
+    the run in seconds instead of turning into a column of task failures.
+    """
+    models = sorted({m for c in configs for m in models_used(c)})
+    problems = []
+    for m in models:
+        try:
+            llm.complete(m, [{"role": "user", "content": "Reply with OK."}], temperature=0.0)
+        except Exception as exc:  # report every failure at once
+            hint = ""
+            if m.startswith("hosted_vllm/") and not os.environ.get("HOSTED_VLLM_API_BASE"):
+                hint = " (HOSTED_VLLM_API_BASE is not set)"
+            problems.append(f"{m}: {type(exc).__name__}: {str(exc)[:200]}{hint}")
+    for name, emb in embedders.items():
+        try:
+            emb.embed(["ok"])
+        except Exception as exc:
+            problems.append(f"{name} (embeddings): {type(exc).__name__}: {str(exc)[:200]}")
+    if problems:
+        raise PreflightError("preflight failed:\n  " + "\n  ".join(problems))
+    return models
+
+
 def run_experiment(
     config_paths: list[str | Path],
     tasks: list[Task],
@@ -68,13 +124,25 @@ def run_experiment(
     backend: str = "litellm",
     engine: str = "auto",
     cache_backend: str | None = None,
+    retry_errors: bool = True,
+    check_models: bool = True,
 ) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     runs_path = out / "runs.jsonl"
+    if retry_errors:
+        moved = _set_aside_errors(runs_path)
+        if moved:
+            log.warning("retrying %d task runs that ended in an error (kept in %s)",
+                        moved, runs_path.parent / "runs.errors.jsonl")
     done = _done_keys(runs_path)
     engine = resolve_engine(engine)
     configs = [load_config(p) for p in config_paths]
+    if check_models and backend != "fake":
+        llm0, _ = make_clients(backend, configs[0])
+        embedders = {c.embedding_model: make_clients(backend, c)[1] for c in configs}
+        checked = preflight(configs, llm0, embedders)
+        log.info("preflight ok: %s", ", ".join(checked))
 
     stores: dict[str, VectorStore] = {}
     with runs_path.open("a") as fh:
