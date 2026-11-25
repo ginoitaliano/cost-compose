@@ -8,6 +8,7 @@ embedding_model: text-embedding-3-small
 
 agents:
   max_iterations: 5                # reasoning-loop cap per subtask (tool calls count)
+  max_output_tokens: 4096          # output cap per request, same for every model
   top_k: 4                         # passages retrieved per subtask
   max_subtasks: 4
   temperature: 0.2
