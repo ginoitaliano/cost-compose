@@ -1,4 +1,4 @@
-.PHONY: install dev test lint dry-run suite run run-extended report spotcheck docker clean
+.PHONY: install dev test lint dry-run suite suite-reuse run run-extended run-reuse report spotcheck docker clean
 
 install:
 	pip install -e ".[all]"
@@ -30,6 +30,19 @@ suite:
 		> data/tasks/suite.jsonl
 	costcompose validate --tasks data/tasks/suite.jsonl
 
+# Reuse stream: same GAIA (and enterprise) tasks, same strata and sizes, but half of each
+# stratum's MuSiQue tasks come in clusters of 2-3 questions that share a single-hop question, so
+# some subtasks recur across tasks. Separate corpus directory, so the main suite is unchanged.
+REUSE_SHARE ?= 0.5
+suite-reuse:
+	python scripts/prepare_musique.py $(if $(MUSIQUE_INPUT),--input $(MUSIQUE_INPUT)) \
+		--have data/tasks/gaia_subset.jsonl $(ENTERPRISE) --per-stratum 40 \
+		--reuse-share $(REUSE_SHARE) --out data/tasks/musique_reuse.jsonl \
+		--corpus-dir data/corpus_reuse/musique
+	cat data/tasks/gaia_subset.jsonl $(ENTERPRISE) data/tasks/musique_reuse.jsonl \
+		> data/tasks/suite_reuse.jsonl
+	costcompose validate --tasks data/tasks/suite_reuse.jsonl
+
 # Configs the paper's Table 1 and hypotheses H1-H3 need, plus the guarded-cache arm.
 CORE_CONFIGS = baseline cache_only route_only composed \
 	configs/ablations/cache_route.yaml configs/ablations/cache_only_pipeline.yaml \
@@ -54,6 +67,15 @@ RUN_ARGS = --tasks data/tasks/suite.jsonl --corpus data/corpus --seeds 0 1 2 --o
 # Full study, 3 seeds. Needs keys, Redis and the vLLM server.
 run:
 	costcompose -v run --configs $(CORE_CONFIGS) $(RUN_ARGS)
+
+# Caching configs on the reuse stream, into their own output directory.
+REUSE_CONFIGS = baseline cache_only route_only composed \
+	configs/ablations/cache_route.yaml configs/ablations/cache_only_pipeline.yaml \
+	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
+	configs/ablations/cache_route_guarded.yaml
+run-reuse:
+	costcompose -v run --configs $(REUSE_CONFIGS) --tasks data/tasks/suite_reuse.jsonl \
+		--corpus data/corpus_reuse --seeds 0 1 2 --out results/full_reuse
 
 # Extra ablations. Same output directory: runs are appended and the report covers both.
 run-extended:

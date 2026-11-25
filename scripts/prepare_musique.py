@@ -23,6 +23,20 @@ also has to rule out other questions' paragraphs.
     # or let it fetch the dev file from a Hugging Face mirror (pip install huggingface_hub)
     python scripts/prepare_musique.py --have data/tasks/gaia_subset.jsonl --per-stratum 40
 
+Reuse stream. MuSiQue composes each question from single-hop questions that carry IDs, and
+different questions reuse the same hop (2,173 of the 2,417 dev questions share at least one hop
+with another). With --reuse-share r, a share r of each stratum's MuSiQue tasks is drawn as
+clusters of 2 to --cluster-max questions that share a hop, so some subtasks recur across tasks
+while the questions themselves do not. That is the reuse a cache inside a pipeline can serve
+correctly; a suite of unrelated questions has almost none. The default r = 0 is the plain
+seeded selection above, unchanged. Clusters may span strata (a 2-hop and a 4-hop question can
+share a hop). The log records, for every selection, how many selected tasks share a hop with
+another selected task, so the no-reuse stream's incidental reuse is measured too.
+
+    python scripts/prepare_musique.py --have data/tasks/gaia_subset.jsonl --per-stratum 40 \
+        --reuse-share 0.5 --out data/tasks/musique_reuse.jsonl \
+        --corpus-dir data/corpus_reuse/musique
+
 The SHA-256 of the input file is logged so the exact data can be cited and checked. Outputs are
 git-ignored like the GAIA subset.
 """
@@ -103,6 +117,91 @@ def select(records: list[dict], need: dict[str, int], seed: int) -> tuple[dict, 
     return picked, log
 
 
+def hop_ids(rec: dict) -> list:
+    return [d["id"] for d in rec["question_decomposition"]]
+
+
+def select_reuse(
+    records: list[dict], need: dict[str, int], seed: int, share: float, cluster_max: int = 3
+) -> tuple[dict, dict]:
+    """Seeded selection where a share of each stratum comes in clusters that share a hop.
+
+    Hops used by two or more eligible questions are visited in a seeded order. For each hop, up
+    to ``cluster_max`` of its not-yet-selected questions are taken, in a seeded order, as long
+    as their strata still have room in the reuse quota; a cluster is kept only if at least two
+    questions join it. The rest of each stratum is filled by the plain seeded shuffle.
+    """
+    pools: dict[str, list[dict]] = {s: [] for s in ORDER}
+    excluded: Counter = Counter()
+    for rec in records:
+        stratum, reason = classify(rec)
+        if reason:
+            excluded[reason] += 1
+        else:
+            pools[stratum].append(rec)
+    want = {s: max(0, need.get(s, 0)) for s in ORDER}
+    quota = {s: round(share * want[s]) for s in ORDER}
+    stratum_of = {r["id"]: s for s in ORDER for r in pools[s]}
+    by_hop: dict = {}
+    for s in ORDER:
+        for r in sorted(pools[s], key=lambda r: r["id"]):
+            for h in hop_ids(r):
+                by_hop.setdefault(h, []).append(r)
+    hops = sorted((h for h, rs in by_hop.items() if len(rs) > 1), key=str)
+    rng = random.Random(f"{seed}:reuse")
+    rng.shuffle(hops)
+    chosen: dict[str, list[dict]] = {s: [] for s in ORDER}
+    taken: set[str] = set()
+    clusters = []
+    for h in hops:
+        if all(len(chosen[s]) >= quota[s] for s in ORDER):
+            break
+        members = [r for r in by_hop[h] if r["id"] not in taken]
+        random.Random(f"{seed}:reuse:{h}").shuffle(members)
+        room = {s: quota[s] - len(chosen[s]) for s in ORDER}
+        joined = []
+        for r in members:
+            s = stratum_of[r["id"]]
+            if room[s] > 0 and len(joined) < cluster_max:
+                joined.append(r)
+                room[s] -= 1
+        if len(joined) < 2:
+            continue
+        for r in joined:
+            chosen[stratum_of[r["id"]]].append(r)
+            taken.add(r["id"])
+        clusters.append({"hop": h, "tasks": [f"musique-{r['id']}" for r in joined]})
+    picked = {}
+    for s in ORDER:
+        rest = sorted((r for r in pools[s] if r["id"] not in taken), key=lambda r: r["id"])
+        random.Random(f"{seed}:{s}").shuffle(rest)
+        picked[s] = chosen[s] + rest[: max(0, want[s] - len(chosen[s]))]
+    log = {
+        "rows": len(records),
+        "excluded": dict(excluded),
+        "eligible_by_stratum": {s: len(pools[s]) for s in ORDER},
+        "needed_by_stratum": want,
+        "written_by_stratum": {s: len(picked[s]) for s in ORDER},
+        "reuse_share": share,
+        "cluster_max": cluster_max,
+        "reuse_quota_by_stratum": quota,
+        "clustered_by_stratum": {s: len(chosen[s]) for s in ORDER},
+        "clusters": clusters,
+    }
+    return picked, log
+
+
+def hop_sharing(selected: list[dict]) -> dict:
+    """How much the selected tasks share hops: the reuse actually present in a stream."""
+    use = Counter(h for r in selected for h in set(hop_ids(r)))
+    sharing = [r for r in selected if any(use[h] > 1 for h in hop_ids(r))]
+    return {
+        "tasks_sharing_a_hop": len(sharing),
+        "tasks": len(selected),
+        "hops_shared": sum(1 for c in use.values() if c > 1),
+    }
+
+
 def to_task(rec: dict, stratum: str) -> dict:
     aliases = [a for a in rec.get("answer_aliases") or [] if a and a != rec["answer"]]
     return {
@@ -156,12 +255,24 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, default=Path("data/tasks/musique_subset.jsonl"))
     ap.add_argument("--corpus-dir", type=Path, default=Path("data/corpus/musique"))
+    ap.add_argument("--reuse-share", type=float, default=0.0,
+                    help="share of each stratum drawn as clusters sharing a hop (0 = none)")
+    ap.add_argument("--cluster-max", type=int, default=3,
+                    help="most questions taken per shared hop")
     args = ap.parse_args(argv)
+    if not 0.0 <= args.reuse_share <= 1.0:
+        ap.error("--reuse-share must be in [0, 1]")
+    if args.cluster_max < 2:
+        ap.error("--cluster-max must be at least 2")
 
     src = args.input or fetch_from_mirror()
     have = count_have([p for p in args.have if p.exists()])
     need = {s: args.per_stratum - have[s] for s in ORDER}
-    picked, log = select(load(src), need, args.seed)
+    if args.reuse_share > 0:
+        picked, log = select_reuse(load(src), need, args.seed, args.reuse_share,
+                                   args.cluster_max)
+    else:
+        picked, log = select(load(src), need, args.seed)
     selected = [r for s in ORDER for r in picked[s]]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +287,7 @@ def main(argv: list[str] | None = None) -> None:
         seed=args.seed,
         have_by_stratum={s: have[s] for s in ORDER},
         corpus_dir=str(args.corpus_dir),
+        hop_sharing=hop_sharing(selected),
         **write_corpus(selected, args.corpus_dir),
     )
     Path(f"{args.out}.log.json").write_text(json.dumps(log, indent=2) + "\n")
@@ -188,6 +300,9 @@ def main(argv: list[str] | None = None) -> None:
           f"wrote {log['written_by_stratum']} to {args.out}", file=sys.stderr)
     print(f"corpus: {log['unique_paragraphs_written']} unique paragraphs in {args.corpus_dir}; "
           f"input sha256 {log['input_sha256']}", file=sys.stderr)
+    hs = log["hop_sharing"]
+    print(f"reuse: {hs['tasks_sharing_a_hop']} of {hs['tasks']} tasks share a hop with another "
+          f"selected task ({hs['hops_shared']} shared hops)", file=sys.stderr)
 
 
 if __name__ == "__main__":

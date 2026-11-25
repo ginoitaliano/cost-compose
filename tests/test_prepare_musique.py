@@ -81,3 +81,52 @@ def test_end_to_end_files_load_as_tasks_and_corpus(tmp_path):
     assert not (corpus / "stale.md").exists()
     store = VectorStore.from_directory(corpus.parent, HashingEmbedder())
     assert len(store.passages) == 59
+
+
+def _hop_rec(i, hops, ids):
+    r = _rec(i, hops)
+    r["question_decomposition"] = [{"id": h, "question": "q", "answer": "a",
+                                    "paragraph_support_idx": k} for k, h in enumerate(ids)]
+    return r
+
+
+# 12 two-hop and 12 three-hop questions; hops 1000-1003 are each shared by three questions,
+# everything else is unique.
+REUSE = ([_hop_rec(i, 2, [1000 + i % 4, 5000 + i]) for i in range(12)]
+         + [_hop_rec(100 + i, 3, [1000 + i % 4, 6000 + i, 7000 + i]) for i in range(12)])
+
+
+def test_reuse_share_zero_is_the_plain_selection():
+    need = {"low": 5, "medium": 5, "high": 0}
+    plain, _ = mq.select(REUSE, need, seed=0)
+    same, _ = mq.select_reuse(REUSE, need, seed=0, share=0.0)
+    for s in ("low", "medium"):
+        assert [r["id"] for r in same[s]] == [r["id"] for r in plain[s]]
+
+
+def test_reuse_share_draws_clusters_that_share_a_hop():
+    need = {"low": 6, "medium": 6, "high": 0}
+    picked, log = mq.select_reuse(REUSE, need, seed=0, share=0.5, cluster_max=3)
+    assert log["written_by_stratum"] == {"low": 6, "medium": 6, "high": 0}
+    assert log["clustered_by_stratum"] == {"low": 3, "medium": 3, "high": 0}
+    assert all(2 <= len(c["tasks"]) <= 3 for c in log["clusters"])
+    selected = [r for s in ("low", "medium") for r in picked[s]]
+    assert len({r["id"] for r in selected}) == 12  # no task picked twice
+    for c in log["clusters"]:
+        members = [r for r in selected if f"musique-{r['id']}" in c["tasks"]]
+        assert all(c["hop"] in mq.hop_ids(r) for r in members)
+    assert mq.hop_sharing(selected)["tasks_sharing_a_hop"] >= 6
+    again, _ = mq.select_reuse(REUSE, need, seed=0, share=0.5, cluster_max=3)
+    assert [r["id"] for r in again["low"]] == [r["id"] for r in picked["low"]]
+
+
+def test_reuse_stream_end_to_end_logs_sharing(tmp_path):
+    src = tmp_path / "dev.jsonl"
+    src.write_text("".join(json.dumps(r) + "\n" for r in REUSE))
+    out, corpus = tmp_path / "reuse.jsonl", tmp_path / "corpus_reuse" / "musique"
+    mq.main(["--input", str(src), "--per-stratum", "4", "--reuse-share", "1.0",
+             "--out", str(out), "--corpus-dir", str(corpus)])
+    assert len(load_tasks(out)) == 8
+    log = json.loads((tmp_path / "reuse.jsonl.log.json").read_text())
+    assert log["reuse_share"] == 1.0 and log["clusters"]
+    assert log["hop_sharing"]["tasks_sharing_a_hop"] == 8
