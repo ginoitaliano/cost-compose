@@ -1,4 +1,5 @@
-"""Task loading. Tasks are JSONL rows: id, question, answer, complexity, source."""
+"""Task loading. Tasks are JSONL rows: id, question, answer, complexity, source, and optional
+aliases (other answers that count as correct, e.g. from MuSiQue)."""
 
 from __future__ import annotations
 
@@ -18,6 +19,12 @@ class Task:
     answer: str
     complexity: str
     source: str = "custom"
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def answers(self) -> tuple[str, ...]:
+        """The reference answer followed by its aliases, without duplicates."""
+        return tuple(dict.fromkeys((self.answer, *self.aliases)))
 
 
 def load_tasks(path: str | Path, limit: int | None = None) -> list[Task]:
@@ -36,6 +43,7 @@ def load_tasks(path: str | Path, limit: int | None = None) -> list[Task]:
                     answer=str(row["answer"]),
                     complexity=row["complexity"],
                     source=row.get("source", "custom"),
+                    aliases=tuple(str(a) for a in row.get("aliases") or ()),
                 )
             )
     ids = [t.id for t in tasks]

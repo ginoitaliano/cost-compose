@@ -11,7 +11,7 @@
 | §3.2 semantic caching, cosine 0.92, `text-embedding-3-small`, agent/pipeline scope | `cache.py`, `caching:` in `configs/base.yaml`. GPTCache-style, reimplemented for per-scope keys and cross-model hit accounting; the GPTCache library is not used. |
 | §3.2 routing, four-feature complexity heuristic, LiteLLM model ladder | `routing.py`, `routing:` in `configs/base.yaml` |
 | §3.2 early stopping, threshold 0.88 | `early_stop.py`. A loop-level stop rule inspired by CALM (Schuster et al. 2022), not CALM: CALM is token-level early exit, while this rule decides whether to run another reasoning-loop iteration. |
-| §3.3 task suite, 40 per stratum | `tasks.py`, `scripts/prepare_gaia.py` (GAIA validation split; excludes web-browsing, attachment and multimodal tasks, with counts by reason) |
+| §3.3 task suite, 40 per stratum | `tasks.py`, `scripts/prepare_gaia.py` (GAIA validation split; excludes web-browsing, attachment and multimodal tasks, with counts by reason), `scripts/prepare_musique.py` (MuSiQue-Ans dev, stratified by hop count, fills each stratum to 40), `make suite` |
 | §3.4 metrics (cost, P50/P95 latency, success, cache hit rate, routing distribution) | `tracking.py`, `analysis.py` |
 | §3.4 task success (automated evaluation against ground truth) | `evaluation.score_lenient` (primary) and `evaluation.score` (strict, GAIA-style); both recorded per task |
 | §3.4 human spot-checks on 10% of tasks | `spotcheck.py`, `costcompose spotcheck sample` / `score`, `make spotcheck` |
@@ -36,6 +36,7 @@
 
 These are not changed in the code. They are listed so the paper text can be brought in line.
 
+- The proposal's suite is 60 GAIA tasks plus enterprise tasks. Only 18 GAIA validation tasks can run without web browsing, attachments or multimodal input (123 of 165 need browsing), so MuSiQue fills each stratum to 40 alongside the enterprise tasks. The paper should report the GAIA exclusion counts and the suite composition by source and stratum.
 - The proposal's ladder starts at Llama-3-8B. The code uses Llama-3.1-8B-Instruct, the current 8B instruct model in the Llama 3 line; the other three rungs are unchanged. The paper should name the model actually run.
 
 - §3.2 says caching is implemented "using GPTCache". The code reimplements GPTCache's design (see above).

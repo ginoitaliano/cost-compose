@@ -113,9 +113,9 @@ set -a; . ./.env; set +a                   # the CLI does not read .env itself; 
 docker run -d -p 6379:6379 redis:7-alpine  # cache backend
 ./scripts/serve_llama.sh &                 # vLLM on 127.0.0.1:8000, one GPU; needs HF_TOKEN with Llama 3.1 access
 
-# Task suite: 60 GAIA tasks + your enterprise RAG tasks, 40 per stratum in total
-python scripts/prepare_gaia.py --per-stratum 20 --out data/tasks/gaia_subset.jsonl
-cat data/tasks/gaia_subset.jsonl data/tasks/enterprise.jsonl > data/tasks/suite.jsonl
+# Task suite, 40 per stratum: every eligible GAIA task, your enterprise tasks
+# (data/tasks/enterprise.jsonl, if present) and MuSiQue filling the rest
+make suite                                 # MUSIQUE_INPUT=path/to/musique_ans_v1.0_dev.jsonl for the official file
 
 make run            # Table 1 + the ablations H1-H3 need, seeds 0 1 2 -> results/full/
 make run-extended   # optional: the other ablations, appended to results/full/
@@ -123,7 +123,9 @@ make report         # rebuild summary.md / summary.json from runs.jsonl
 make spotcheck      # 10% human spot-check sample -> results/full/spotcheck.csv
 ```
 
-GAIA tasks come from the validation split only, because it is the only split with public answers. `prepare_gaia.py` excludes tasks the pipeline cannot attempt. Its tools are a calculator and search over the local corpus, so it drops tasks that need web browsing, tasks with an attached file it cannot read (any attachment by default; `--readable-extensions` allows some), and tasks that need multimodal input. The decision uses GAIA's metadata: the `file_name` field and the annotators' tool list, plus URLs or YouTube links in the question. Exclusion counts by reason are printed and written to `<out>.exclusions.json`, which holds counts only, no task content. Tasks with no annotator tool list are kept and counted so they can be reviewed by hand. If fewer than 20 eligible tasks remain in a stratum, the script warns rather than padding.
+GAIA tasks come from the validation split only, because it is the only split with public answers. `prepare_gaia.py` excludes tasks the pipeline cannot attempt. Its tools are a calculator and search over the local corpus, so it drops tasks that need web browsing, tasks with an attached file it cannot read (any attachment by default; `--readable-extensions` allows some), and tasks that need multimodal input. The decision uses GAIA's metadata: the `file_name` field and the annotators' tool list, plus URLs or YouTube links in the question. Exclusion counts by reason are printed and written to `<out>.exclusions.json`, which holds counts only, no task content. Tasks with no annotator tool list are kept and counted so they can be reviewed by hand. If fewer eligible tasks remain than requested, the script warns rather than padding. In practice only 18 of the 165 validation tasks qualify (8 low, 6 medium, 4 high): 123 need web browsing, 41 need multimodal input and 25 have attachments (a task can have several reasons).
+
+MuSiQue fills the gap. It is multi-hop question answering over Wikipedia paragraphs (Trivedi et al., TACL 2022; CC BY 4.0), built from 2, 3 or 4 single-hop questions where each later hop depends on an earlier answer, which is the dependency chain the pipeline is built around. Hop count sets the stratum: 2 hops low, 3 medium, 4 high. `scripts/prepare_musique.py` uses the dev split of MuSiQue-Ans (answerable questions; the test split's answers are not public), counts the tasks already in the suite per stratum, and takes a seeded selection of MuSiQue questions to fill each stratum to 40. A smaller selection is always a prefix of a larger one, so adding enterprise tasks later only removes MuSiQue tasks from the end. Each selected question's 20 paragraphs (supporting and distractors) go into `data/corpus/musique/`, deduplicated, and all questions share that corpus. Accepted answer aliases are kept, and both scores accept any of them. The log next to the output records counts per stratum and the input file's SHA-256, so the exact data can be checked against the official release from StonyBrookNLP/musique.
 
 Human spot-checks (paper §3.4) check the automated scorer. `costcompose spotcheck sample results/full --tasks data/tasks/suite.jsonl` draws a seeded 10% of task IDs per complexity stratum (4 per stratum at 40/40/40) and one seed per sampled task. It writes a CSV row for every config that ran that task and seed, so scorer errors that depend on the config show up. It will not overwrite an existing CSV without `--force`. Fill `human_success` with 1 or 0, then `costcompose spotcheck score results/full/spotcheck.csv` reports agreement and Cohen's kappa against `auto_success`, overall and per config with n, and lists the disagreements. The CSV holds task questions, and for GAIA tasks it must not be published; `results/` is git-ignored.
 
@@ -173,7 +175,7 @@ Each task gets two scores. Strict success (`success_strict`) is GAIA-style quasi
 
 An optional judge audits the scorer without changing it. `costcompose judge results/full --tasks data/tasks/suite.jsonl --model <id> --api-base <url>` asks an independent model whether each answer means the same as the reference, for the runs where primary and strict disagree (add `--include-spotcheck results/full/spotcheck.csv` to judge the human-graded sample too). It reports agreement and Cohen's kappa with each score, overall and per config, in `judge_agreement.json`. The judge must not be on the routing ladder; the command refuses GPT-4o, Claude and Llama-3.1, since a model grading its own family's answers tends to favour them. A self-served open model from another family fits, served on its own port with vLLM after the study run (stop the Llama server first or give each a share of the GPU with `--gpu-memory-utilization`). Nothing it does changes `runs.jsonl` or any reported success rate.
 
-Documents for retrieval go in `--corpus` as `.md` or `.txt`.
+Documents for retrieval go in `--corpus` as `.md` or `.txt`; subfolders are read too. `data/corpus/sample/` holds the three documents behind the sample tasks, which the tests and `make dry-run` use on their own so their results do not change when other corpora are added. Full runs use all of `data/corpus/`: the sample documents, `musique/` and your enterprise documents.
 
 ## Layout
 
@@ -192,7 +194,7 @@ src/costcompose/
   judge.py        optional off-ladder LLM-judge audit of the scorer
   cli.py          costcompose run | report | validate | spotcheck | judge
 configs/          Table 1 configurations and ablations
-data/             sample corpus and tasks (GAIA is fetched, never committed)
+data/             sample corpus and tasks (GAIA and MuSiQue are fetched, never committed)
 scripts/          vLLM server, GAIA subset builder and filter
 paper/            the paper and a section-to-code map
 ```

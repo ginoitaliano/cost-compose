@@ -1,4 +1,4 @@
-.PHONY: install dev test lint dry-run run run-extended report spotcheck docker clean
+.PHONY: install dev test lint dry-run suite run run-extended report spotcheck docker clean
 
 install:
 	pip install -e ".[all]"
@@ -14,7 +14,21 @@ lint:
 	ruff check .
 
 dry-run:
-	costcompose run --dry-run --tasks data/tasks/sample.jsonl --corpus data/corpus --seeds 0 1 2 --out results/dry-run
+	costcompose run --dry-run --tasks data/tasks/sample.jsonl --corpus data/corpus/sample --seeds 0 1 2 --out results/dry-run
+
+# Task suite: every eligible GAIA task, the enterprise tasks if written, and MuSiQue filling each
+# stratum to 40. Needs HF_TOKEN with GAIA access; MuSiQue is fetched from a Hugging Face mirror
+# unless MUSIQUE_INPUT points at the official musique_ans_v1.0_dev.jsonl.
+ENTERPRISE = $(wildcard data/tasks/enterprise.jsonl)
+MUSIQUE_INPUT ?=
+suite:
+	python scripts/prepare_gaia.py --per-stratum 40 --out data/tasks/gaia_subset.jsonl
+	python scripts/prepare_musique.py $(if $(MUSIQUE_INPUT),--input $(MUSIQUE_INPUT)) \
+		--have data/tasks/gaia_subset.jsonl $(ENTERPRISE) --per-stratum 40 \
+		--out data/tasks/musique_subset.jsonl --corpus-dir data/corpus/musique
+	cat data/tasks/gaia_subset.jsonl $(ENTERPRISE) data/tasks/musique_subset.jsonl \
+		> data/tasks/suite.jsonl
+	costcompose validate --tasks data/tasks/suite.jsonl
 
 # Configs the paper's Table 1 and hypotheses H1-H3 need.
 CORE_CONFIGS = baseline cache_only route_only composed \
