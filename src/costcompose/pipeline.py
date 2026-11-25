@@ -23,7 +23,7 @@ from .agents import (
     retrieve_node,
     single_agent_node,
 )
-from .evaluation import extract_final_answer, score, score_lenient
+from .evaluation import answer_f1, extract_final_answer, score, score_lenient
 from .tasks import Task
 from .tracking import TaskTrace
 
@@ -115,6 +115,7 @@ def run_task(rt: Runtime, task: Task, engine: str = "auto", graph: Any = None) -
         "gold": task.answer,
         "success": success,
         "success_strict": success_strict,
+        "f1": answer_f1(extract_final_answer(final), task.answers) if final else 0.0,
         "routing_policy": rt.router.policy,
         "router_updates": updates,
         "latency_s": latency,

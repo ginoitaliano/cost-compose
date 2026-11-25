@@ -1,4 +1,7 @@
-.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run-dev run run-extended run-reuse report spotcheck docker clean
+.PHONY: install dev test lint dry-run suite suite-reuse suite-dev run-dev run-dev-refs run run-extended run-reuse report spotcheck docker clean
+
+# LiteLLM logs every call at INFO; keep errors only (override: make run LITELLM_LOG=INFO).
+export LITELLM_LOG ?= ERROR
 
 install:
 	pip install -e ".[all]"
@@ -51,7 +54,9 @@ CORE_CONFIGS = baseline cache_only route_only composed \
 	configs/ablations/cache_only_guarded.yaml configs/ablations/composed_guarded.yaml \
 	configs/ablations/cache_route_guarded.yaml \
 	configs/ablations/cache_only_structured.yaml configs/ablations/composed_structured.yaml \
-	configs/ablations/cache_route_structured.yaml
+	configs/ablations/cache_route_structured.yaml \
+	configs/ablations/llama_only.yaml configs/ablations/haiku_only.yaml \
+	configs/ablations/sonnet_only.yaml
 
 # Ablations beyond the paper: individual early stopping, learned routing, composition effect 4,
 # tool-call guard, one cache guard at a time. Every file in configs/ablations/ must be in
@@ -87,6 +92,13 @@ DEV_CONFIGS = baseline cache_only configs/ablations/cache_only_guarded.yaml \
 	configs/ablations/cache_only_structured.yaml configs/ablations/cache_only_structured_keys.yaml
 run-dev:
 	costcompose -v run --configs $(DEV_CONFIGS) --tasks data/tasks/dev.jsonl \
+		--corpus data/corpus_dev --seeds 0 --out results/dev
+
+# Single models, the oracle bound and routing on the development set, into the same directory.
+DEV_REF_CONFIGS = baseline route_only configs/ablations/llama_only.yaml \
+	configs/ablations/haiku_only.yaml configs/ablations/sonnet_only.yaml
+run-dev-refs:
+	costcompose -v run --configs $(DEV_REF_CONFIGS) --tasks data/tasks/dev.jsonl \
 		--corpus data/corpus_dev --seeds 0 --out results/dev
 
 # Caching configs on the reuse stream, into their own output directory.

@@ -16,7 +16,9 @@ You are a reasoning agent. Solve the subtask using the context, earlier results 
 Call a tool whenever arithmetic or lookup is needed. When you have an answer, respond exactly:
 ANSWER: <concise answer>
 CONFIDENCE: <number between 0 and 1>
-STATUS: <DRAFT or FINAL>"""
+STATUS: <DRAFT or FINAL>
+If the context does not settle the answer, give your best answer with a low confidence; never \
+answer that it is unknown or unavailable."""
 
 REFINE = "Check your previous answer against the context and refine it. Keep the same format."
 
@@ -25,7 +27,8 @@ You combine subtask results into the final answer to the user's task. Respond wi
 "FINAL ANSWER: <answer>". The answer should be a number, as few words as possible, or a \
 comma-separated list. For a number, give the number only: no units, currency symbols or \
 thousands separators, even when the question names a unit (for "in USD", answer 95, not \
-95 USD)."""
+95 USD). Give the answer itself, not a sentence about it. If the subtask results do not settle \
+it, give your best answer; never answer that it is unknown, none or unavailable."""
 
 SINGLE_AGENT = """[role=single]
 You are a single agent answering the user's task on your own. Use the search_docs tool to \
@@ -33,6 +36,8 @@ retrieve passages from the document store and the calculator tool for arithmetic
 have an answer, respond exactly:
 ANSWER: <concise answer: a number, as few words as possible, or a comma-separated list; for a \
 number, the number only, with no units, currency symbols or thousands separators, even when the \
-question names a unit>
+question names a unit; the answer itself, not a sentence about it>
 CONFIDENCE: <number between 0 and 1>
-STATUS: <DRAFT or FINAL>"""
+STATUS: <DRAFT or FINAL>
+If the documents do not settle the answer, give your best answer with a low confidence; never \
+answer that it is unknown or unavailable."""

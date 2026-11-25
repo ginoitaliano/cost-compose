@@ -1,0 +1,6 @@
+# Reference point: every request goes to one model, the bottom rung of the routing ladder. With baseline
+# (GPT-4o for every request) these give each model's cost and success on the same tasks, and the
+# task-level oracle: the cheapest of these models that solves each task.
+extends: ../base.yaml
+name: llama_only
+routing: {default_model: hosted_vllm/meta-llama/Llama-3.1-8B-Instruct}

@@ -13,9 +13,17 @@ Two scores are computed for every task:
   instruction to drop units, which differs by model and so would bias routing comparisons.
 
 The rule was fixed before any study data was collected; both scores are recorded and reported.
+
+A third, continuous score is recorded for every task: ``answer_f1``, the token-overlap F1 used by
+MuSiQue's official evaluation (SQuAD normalisation: lower case, no punctuation or articles), the
+maximum over the reference answer and its aliases. Match scores give no credit for "1999" against
+"30 November 1999" or "Sarmatians, Goths" against "Iranic Sarmatians and the Germanic Goths";
+F1 gives partial credit, which is how multi-hop QA is usually reported.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 import re
 import string
@@ -34,6 +42,28 @@ _SCALE_OR_HEDGE = {
 }
 # Connecting words allowed inside a unit phrase ("GPU-hours per week").
 _UNIT_GLUE = {"per", "a", "an", "each", "the", "of", "in"}
+
+
+def _squad_tokens(s: str) -> list[str]:
+    s = s.lower()
+    s = "".join(ch for ch in s if ch not in set(string.punctuation))
+    return _ARTICLES.sub(" ", s).split()
+
+
+def answer_f1(prediction: str, golds) -> float:
+    """MuSiQue/SQuAD answer F1 of a prediction against the best of several reference answers."""
+    pred = _squad_tokens(prediction or "")
+    best = 0.0
+    for gold in golds:
+        ref = _squad_tokens(gold)
+        if not pred or not ref:
+            best = max(best, float(pred == ref))
+            continue
+        common = sum((Counter(pred) & Counter(ref)).values())
+        if common:
+            p, r = common / len(pred), common / len(ref)
+            best = max(best, 2 * p * r / (p + r))
+    return best
 
 
 def extract_final_answer(output: str) -> str:

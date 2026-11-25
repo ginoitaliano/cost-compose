@@ -301,6 +301,10 @@ def _scoring(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         "primary": _rate(sum(bool(r["success"]) for r in rows), n),
         "strict": _rate(sum(bool(r["success_strict"]) for r in rows), n),
         "scored_differently": sum(bool(r["success"]) != bool(r["success_strict"]) for r in rows),
+        "mean_f1": (
+            {"mean": float(np.mean([r["f1"] for r in rows])), "n": n}
+            if all("f1" in r for r in rows) else None
+        ),
     }
 
 
@@ -514,9 +518,79 @@ def compare(records: list[dict[str, Any]], ref: str, cfg: str) -> dict[str, Any]
             "mcnemar": _mcnemar_exact([a[k] for k in keys], [b[k] for k in keys]),
         },
         "success_strict": strict,
+        "f1": (
+            _paired_delta(records, ref, cfg, "f1")
+            if rows_ab and all("f1" in r for r in rows_ab) else None
+        ),
         "cost_usd": _paired_delta(records, ref, cfg, "cost_usd", relative=True),
         "latency_s": _paired_delta(records, ref, cfg, "latency_s"),
     }
+
+
+# Single-model reference configs, cheapest first. baseline is GPT-4o for every request.
+SINGLE_MODEL = ("llama_only", "haiku_only", "baseline", "sonnet_only")
+ROUTED_FOR_ORACLE = ("route_only", "learned_route")
+
+
+def _oracle(records: list[dict[str, Any]], configs: dict[str, Any]) -> dict[str, Any] | None:
+    """Task-level oracle over the single-model configs: the most any router could save.
+
+    For each (task, seed) every single-model config ran, the oracle takes the cheapest model
+    that succeeded, or the cheapest model when none did. Its success is at least the best single
+    model's, and its cost is a lower bound for routing among these models at task level. Savings
+    are relative to baseline cost, with a 95% paired bootstrap CI over tasks. Routed configs are
+    placed against the bound: the share of the oracle's saving they realise.
+    """
+    members = [c for c in SINGLE_MODEL if c in configs]
+    if "baseline" not in members or len(members) < 2:
+        return None
+    rows = {(r["config"], r["task_id"], r["seed"]): r for r in records if r["config"] in members}
+    keys = sorted({(t, s) for (_, t, s) in rows if all((m, t, s) in rows for m in members)})
+    if not keys:
+        return None
+    picks: Counter = Counter()
+    per_task: dict[str, list[tuple[float, float, bool]]] = defaultdict(list)
+    for t, s in keys:
+        runs = [(m, rows[(m, t, s)]) for m in members]
+        solved = [(r["cost_usd"], m) for m, r in runs if r["success"]]
+        cost, pick = min(solved) if solved else min((r["cost_usd"], m) for m, r in runs)
+        picks[pick if solved else "none"] += 1
+        per_task[t].append((rows[("baseline", t, s)]["cost_usd"], cost, bool(solved)))
+    tasks = sorted(per_task)
+    base = np.array([np.mean([x[0] for x in per_task[t]]) for t in tasks])
+    orc = np.array([np.mean([x[1] for x in per_task[t]]) for t in tasks])
+    idx = _boot_index(len(tasks))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        saving = 1 - orc.sum() / base.sum()
+        b_saving = 1 - orc[idx].sum(axis=1) / base[idx].sum(axis=1)
+    out = {
+        "members": members,
+        "n_task_runs": len(keys),
+        "n_tasks": len(tasks),
+        "oracle_success": _rate(sum(x[2] for t in tasks for x in per_task[t]), len(keys)),
+        "oracle_cost_usd": float(orc.mean()),
+        "baseline_cost_usd": float(base.mean()),
+        "oracle_saving": float(saving),
+        "oracle_saving_ci95": _ci95(b_saving),
+        "picks": {m: _rate(picks[m], len(keys)) for m in [*members, "none"]},
+        "single_models": {
+            m: {"success": _rate(sum(rows[(m, t, s)]["success"] for t, s in keys), len(keys)),
+                "cost_usd": float(np.mean([rows[(m, t, s)]["cost_usd"] for t, s in keys]))}
+            for m in members
+        },
+    }
+    realised = {}
+    for c in ROUTED_FOR_ORACLE:
+        if c not in configs:
+            continue
+        rc = [r["cost_usd"] for r in records if r["config"] == c
+              and (r["task_id"], r["seed"]) in set(keys)]
+        if len(rc) == len(keys):
+            s_c = 1 - np.mean(rc) / out["baseline_cost_usd"]
+            realised[c] = {"saving": float(s_c),
+                           "share_of_oracle_saving": float(s_c / saving) if saving else None}
+    out["routed"] = realised
+    return out
 
 
 def _comparisons(configs: dict[str, Any], records: list[dict[str, Any]]) -> list[dict]:
@@ -657,6 +731,9 @@ def hypotheses(configs: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
             }
     if learned:
         out["learned_vs_heuristic_routing"] = learned
+    oracle = _oracle(records, configs)
+    if oracle is not None:
+        out["oracle_routing_bound"] = oracle
     h3 = _h3_test(records, configs)
     if h3 is not None:
         out["H3_routing_success_drop"] = h3
@@ -742,6 +819,34 @@ def _mechanism_markdown(cfgs: dict[str, Any], order: list[str]) -> list[str]:
         sg = cfgs[c]["cache_correctness"]["mechanisms"]["success_given_hit"]
         lines.append(f"| {c} | {_r(sg['same_loop'])} | {_r(sg['same_task'])} "
                      f"| {_r(sg['cross_task'])} |")
+    return lines
+
+
+def _oracle_markdown(o: dict[str, Any] | None) -> list[str]:
+    if not o:
+        return []
+    lines = [
+        "", "## Single models and the oracle bound", "",
+        f"Every request on one model, on the same {o['n_tasks']} tasks "
+        f"({o['n_task_runs']} task runs). The oracle takes, per task run, the cheapest model "
+        "that succeeded (or the cheapest model when none did): the most a task-level router over "
+        "these models could save. Savings are relative to baseline (GPT-4o) cost.", "",
+        "| Model config | Success | Cost / task | Oracle picks it |", "| --- | --- | --- | --- |",
+    ]
+    for m, v in o["single_models"].items():
+        lines.append(f"| {m} | {_r(v['success'])} | ${v['cost_usd']:.4f} "
+                     f"| {_r(o['picks'][m])} |")
+    lines += [
+        f"| oracle | {_r(o['oracle_success'])} | ${o['oracle_cost_usd']:.4f} "
+        f"| none solved: {_r(o['picks']['none'])} |",
+        "", f"Oracle saving: {100 * o['oracle_saving']:.1f}% "
+        f"95% CI {_pct_ci(o['oracle_saving_ci95'])}.",
+    ]
+    for c, v in o.get("routed", {}).items():
+        share = v["share_of_oracle_saving"]
+        lines.append(f"{c} saves {100 * v['saving']:.1f}%"
+                     + (f", {100 * share:.0f}% of the oracle's saving." if share is not None
+                        else "."))
     return lines
 
 
@@ -896,30 +1001,37 @@ def _scoring_markdown(cfgs: dict[str, Any], order: list[str],
         "Primary success accepts a numeric answer followed by unit words the question names "
         "(\"95 USD\" for a question \"in USD\"). Strict success is GAIA-style quasi-exact match, "
         "where any trailing unit fails. Pooled over seeds; n is task runs.", "",
-        "| Config | Primary success | Strict success | Runs scored differently |",
-        "| --- | --- | --- | --- |",
+        "Answer F1 is MuSiQue's official token-overlap F1 against the best of the reference "
+        "answer and its aliases, which gives partial credit (\"1999\" for \"30 November "
+        "1999\").", "",
+        "| Config | Primary success | Strict success | Runs scored differently | Mean answer F1 |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for c in rows:
         s = cfgs[c]["scoring"]
+        f1 = s.get("mean_f1")
+        f1s = f"{f1['mean']:.3f} (n={f1['n']})" if f1 else "–"
         lines.append(f"| {c} | {_r(s['primary'])} | {_r(s['strict'])} "
-                     f"| {s['scored_differently']} |")
+                     f"| {s['scored_differently']} | {f1s} |")
     strict = [c for c in comparisons if c.get("success_strict")]
     if strict:
         lines += [
             "", "Paired success comparisons under each rule. A conclusion that holds under one "
             "rule but not the other depends on answer formatting.", "",
             "| Config | Reference | Primary diff (95% CI) | McNemar p | Strict diff (95% CI) "
-            "| McNemar p |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "| McNemar p | F1 diff (95% CI) |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
         for c in strict:
-            p_, s_ = c["success"], c["success_strict"]
+            p_, s_, f_ = c["success"], c["success_strict"], c.get("f1")
+            f1d = (f"{f_['delta']:+.3f} [{f_['delta_ci95'][0]:+.3f}, {f_['delta_ci95'][1]:+.3f}]"
+                   if f_ else "–")
             lines.append(
                 f"| {c['config']} | {c['reference']} "
                 f"| {100 * p_['delta']:+.1f} pp {_pct_ci(p_['delta_ci95'])} "
                 f"| {_p(p_['mcnemar']['p_value'])} "
                 f"| {100 * s_['delta']:+.1f} pp {_pct_ci(s_['delta_ci95'])} "
-                f"| {_p(s_['mcnemar']['p_value'])} |"
+                f"| {_p(s_['mcnemar']['p_value'])} | {f1d} |"
             )
     return lines
 
@@ -971,6 +1083,7 @@ def to_markdown(summary: dict[str, Any]) -> str:
     lines += _h1_markdown(hyp.get("H1_structured_cache"),
                           "H1 with the structured cache")
     lines += _h3_markdown(hyp.get("H3_routing_success_drop"))
+    lines += _oracle_markdown(hyp.get("oracle_routing_bound"))
     lines += _e4_markdown(hyp.get("E4_cache_induced_early_stops"))
     lines += _cache_markdown(cfgs, order)
     lines += _mechanism_markdown(cfgs, order)
