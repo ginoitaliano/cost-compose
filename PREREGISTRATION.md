@@ -45,10 +45,17 @@ Everything in `configs/base.yaml` at the commit that adds this file, including:
 - API list prices, checked 2026-11-25: GPT-4o $2.50 / $10.00, Claude Haiku 4.5 $1 / $5,
   Claude Sonnet 4.5 $3 / $15 per million input / output tokens; `text-embedding-3-small`
   $0.02 per million tokens.
-- The Llama price per million tokens is set before the run from the Studio GPU's hourly rate
-  and the throughput vLLM reports during the development runs:
-  price = hourly rate / (3,600 x tokens per second) x 10^6, the same for input and output.
-  The value and its inputs are recorded in `configs/base.yaml` and `docs/DEVLOG.md`.
+- Llama-3.1-8B-Instruct is priced like the other models, at a serverless API list price:
+  $0.05 input and $0.08 output per million tokens (Groq, checked 2026-11-25; listed providers
+  range from $0.02 / $0.04 to about $0.22 blended). The model is served on our own GPU only so
+  that the run does not depend on a third-party endpoint.
+- Sensitivity, reported with the results: Llama at the top of the listed range, and at the
+  self-hosted price our development runs implied. vLLM processed a mean of 258 tokens per second
+  (187 prompt, 71 generation; 236 samples) while serving the development runs one request at a
+  time, so the self-hosted price is the GPU's hourly rate / (3,600 x 258) x 10^6 per million
+  tokens, about $1.08 per million tokens for each dollar of hourly rate. At that utilisation,
+  self-hosting costs about as much per token as GPT-4o's input price, which would change every
+  saving that relies on Llama.
 
 ## Configurations
 

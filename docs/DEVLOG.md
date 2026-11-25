@@ -114,7 +114,13 @@ These pilot tasks came from the evaluation suite. Of its 18 GAIA tasks, 8 were s
   (C1-C4). The composed guarded and structured configurations and `composed_model_aware` move to
   the extended set; the main run has 15 configurations and the reuse run 9.
 
+- Decided: Llama is priced at a serverless list price ($0.05 / $0.08 per million tokens, Groq,
+  checked 2026-11-25), like every other model, instead of from our GPU's hourly rate. Measured
+  vLLM throughput while serving the development runs one request at a time was 258 tokens per
+  second (187 prompt, 71 generation), which puts the self-hosted price near GPT-4o's input
+  price; providers batch many requests and charge 30-100 times less. The self-hosted price is
+  reported as a sensitivity check.
+
 ## Next
 
-- Set the Llama price from the GPU rate and measured throughput (PREREGISTRATION.md).
 - Commit the preregistration, then run both evaluation streams once.
