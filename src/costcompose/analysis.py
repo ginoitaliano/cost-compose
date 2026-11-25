@@ -540,6 +540,11 @@ def _oracle(records: list[dict[str, Any]], configs: dict[str, Any]) -> dict[str,
     model's, and its cost is a lower bound for routing among these models at task level. Savings
     are relative to baseline cost, with a 95% paired bootstrap CI over tasks. Routed configs are
     placed against the bound: the share of the oracle's saving they realise.
+
+    The per-run oracle profits from run-to-run noise: it can pick a model on a run where that
+    model happened to succeed. The seed-averaged oracle removes that: per task it takes each
+    model's success averaged over seeds and picks the cheapest model with the highest average
+    (expected success), at that model's average cost. With one seed the two coincide.
     """
     members = [c for c in SINGLE_MODEL if c in configs]
     if "baseline" not in members or len(members) < 2:
@@ -590,6 +595,36 @@ def _oracle(records: list[dict[str, Any]], configs: dict[str, Any]) -> dict[str,
             realised[c] = {"saving": float(s_c),
                            "share_of_oracle_saving": float(s_c / saving) if saving else None}
     out["routed"] = realised
+
+    # Seed-averaged oracle: per task, the cheapest model with the best mean success over seeds.
+    seeds_per_task = Counter(t for t, _ in keys)
+    avg_picks: Counter = Counter()
+    avg_success, avg_cost = [], []
+    for t in tasks:
+        s_of = {m: np.mean([rows[(m, t, s)]["success"] for tt, s in keys if tt == t])
+                for m in members}
+        c_of = {m: np.mean([rows[(m, t, s)]["cost_usd"] for tt, s in keys if tt == t])
+                for m in members}
+        best = max(s_of.values())
+        pick = min((c_of[m], m) for m in members if s_of[m] == best)[1]
+        avg_picks[pick if best > 0 else "none"] += 1
+        avg_success.append(best)
+        avg_cost.append(c_of[pick])
+    a_cost = np.array(avg_cost)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        a_saving = 1 - a_cost.sum() / base.sum()
+        b_a_saving = 1 - a_cost[idx].sum(axis=1) / base[idx].sum(axis=1)
+    out["seed_averaged"] = {
+        "seeds_per_task": sorted(set(seeds_per_task.values())),
+        "expected_success": float(np.mean(avg_success)),
+        "n_tasks": len(tasks),
+        "cost_usd": float(a_cost.mean()),
+        "saving": float(a_saving),
+        "saving_ci95": _ci95(b_a_saving),
+        "picks": {m: _rate(avg_picks[m], len(tasks)) for m in [*members, "none"]},
+    }
+    for v in realised.values():
+        v["share_of_seed_averaged_saving"] = (v["saving"] / a_saving) if a_saving else None
     return out
 
 
@@ -839,14 +874,25 @@ def _oracle_markdown(o: dict[str, Any] | None) -> list[str]:
     lines += [
         f"| oracle | {_r(o['oracle_success'])} | ${o['oracle_cost_usd']:.4f} "
         f"| none solved: {_r(o['picks']['none'])} |",
-        "", f"Oracle saving: {100 * o['oracle_saving']:.1f}% "
-        f"95% CI {_pct_ci(o['oracle_saving_ci95'])}.",
+        "", f"Per-run oracle saving: {100 * o['oracle_saving']:.1f}% "
+        f"95% CI {_pct_ci(o['oracle_saving_ci95'])}. This is optimistic: it can pick a model "
+        "on a run where that model happened to succeed.",
     ]
+    a = o.get("seed_averaged")
+    if a:
+        seeds = "/".join(str(x) for x in a["seeds_per_task"])
+        lines += [
+            "", f"Seed-averaged oracle ({seeds} seed(s) per task, n={a['n_tasks']} tasks): per "
+            "task, the cheapest model with the highest success averaged over seeds. Expected "
+            f"success {100 * a['expected_success']:.1f}%, cost ${a['cost_usd']:.4f} per task, "
+            f"saving {100 * a['saving']:.1f}% 95% CI {_pct_ci(a['saving_ci95'])}. With one seed "
+            "per task it equals the per-run oracle.",
+        ]
     for c, v in o.get("routed", {}).items():
-        share = v["share_of_oracle_saving"]
+        share = v.get("share_of_seed_averaged_saving", v["share_of_oracle_saving"])
         lines.append(f"{c} saves {100 * v['saving']:.1f}%"
-                     + (f", {100 * share:.0f}% of the oracle's saving." if share is not None
-                        else "."))
+                     + (f", {100 * share:.0f}% of the seed-averaged oracle's saving."
+                        if share is not None else "."))
     return lines
 
 
